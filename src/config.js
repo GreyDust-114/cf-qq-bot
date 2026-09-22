@@ -22,6 +22,9 @@ export const DEBOUNCE_GROUP_MAX_MS = 9 * 1000;
 export const AUTONOMOUS_COOLDOWN_MIN_MS = 15 * 1000;
 export const AUTONOMOUS_COOLDOWN_MAX_MS = 45 * 1000;
 
+// 群聊里机器人刚接完话的活跃期：原发言者的续句直接走回复路径，不再经过插话冷却判断。
+export const ACTIVE_WINDOW_MS = 90 * 1000;
+
 export const INVOCATION_BUDGET_MS = 28 * 1000;
 export const MIN_STAGE_BUDGET_MS = 2000;
 export const SEND_BUDGET_RESERVE_MS = 8000;

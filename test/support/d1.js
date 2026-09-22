@@ -1,12 +1,17 @@
-// 测试用 D1 adapter：内存 node:sqlite + 生产 migration 的真实 schema。
+// 测试用 D1 adapter：内存 node:sqlite + 全部生产 migration 的真实 schema。
 
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 
-const SCHEMA_SQL = readFileSync(
-  new URL("../../db/migrations/0001_init.sql", import.meta.url),
-  "utf8",
-);
+const MIGRATIONS_DIR = new URL("../../db/migrations/", import.meta.url);
+
+const SCHEMA_SQL = readdirSync(MIGRATIONS_DIR)
+  .filter((file) => file.endsWith(".sql"))
+  .sort()
+  .map((file) =>
+    readFileSync(new URL(file, MIGRATIONS_DIR), "utf8"),
+  )
+  .join("\n");
 
 export function createSqliteD1() {
   const database = new DatabaseSync(":memory:");

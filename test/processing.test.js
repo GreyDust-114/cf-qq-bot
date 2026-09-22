@@ -309,7 +309,7 @@ test("group decision NO_REPLY stays silent", async () => {
   assert.equal(messages.filter((row) => row.role === "assistant").length, 0);
 });
 
-test("autonomous cooldown suppresses back-to-back interjections", async () => {
+test("autonomous cooldown suppresses other members' back-to-back interjections", async () => {
   const ctx = createTestContext({
     fetchHandlers: { llmReply: "接句话" },
   });
@@ -319,14 +319,18 @@ test("autonomous cooldown suppresses back-to-back interjections", async () => {
       id: "group-2",
       content: "话题一",
       mentioned: false,
+      memberOpenid: "member-openid-1",
     }),
   );
 
+  // Same group, different member: this is a new interjection, not a
+  // continuation of the conversation the bot just joined.
   await ctx.deliver(
     buildGroupPayload({
       id: "group-3",
       content: "话题二",
       mentioned: false,
+      memberOpenid: "member-openid-2",
     }),
   );
 

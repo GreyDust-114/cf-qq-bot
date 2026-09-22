@@ -7,7 +7,7 @@
 // successful send. Stale output (a newer revision or a lost lease) is dropped
 // before the first bubble and re-checked between bubbles.
 
-import { INVOCATION_BUDGET_MS } from "./config.js";
+import { ACTIVE_WINDOW_MS, INVOCATION_BUDGET_MS } from "./config.js";
 import { createDependencies } from "./dependencies.js";
 import { createLlmClient } from "./llm.js";
 import { createReplySender } from "./sender.js";
@@ -103,6 +103,33 @@ export function createProcessor(env, overrides = {}) {
     };
   }
 
+  // Any successful group reply opens (or refreshes) the active window: the
+  // person whose message carried the reply gets the forced reply path for
+  // their follow-ups, so the interjection decision and its cooldown never
+  // swallow the ongoing conversation.
+  async function finishGroupReply(trigger, outcome, route) {
+    if (outcome.status !== "replied" || trigger.scope !== "group") {
+      return outcome;
+    }
+
+    const until = deps.now() + ACTIVE_WINDOW_MS;
+
+    await store.markActiveWindow(
+      trigger.conversationId,
+      trigger.memberOpenid ?? null,
+      until,
+    );
+
+    deps.logger.log("Active window opened:", {
+      conversationId: trigger.conversationId,
+      speaker: trigger.memberOpenid ?? null,
+      until,
+      route,
+    });
+
+    return outcome;
+  }
+
   async function replyToPrivateMessage(
     trigger,
     context,
@@ -138,12 +165,13 @@ export function createProcessor(env, overrides = {}) {
     );
   }
 
-  async function replyToGroupMention(
+  async function replyToAddressedGroupMessage(
     trigger,
     context,
     deadline,
     tokenPromise,
     isCurrent,
+    continuation = false,
   ) {
     const hasImages = trigger.imageUrls.length > 0;
     let reply;
@@ -153,6 +181,7 @@ export function createProcessor(env, overrides = {}) {
         (includeImages) =>
           buildGroupMessages(context, trigger, {
             decision: false,
+            continuation,
             includeImages,
             now: deps.now(),
           }),
@@ -161,16 +190,27 @@ export function createProcessor(env, overrides = {}) {
         deadline,
       );
     } catch (error) {
-      deps.logger.error("stage=llm mention failed:", error);
+      deps.logger.error(
+        continuation
+          ? "stage=llm continuation failed:"
+          : "stage=llm mention failed:",
+        error,
+      );
       reply = MENTION_FALLBACK_REPLY;
     }
 
-    return sendAndStore(
+    const outcome = await sendAndStore(
       trigger,
       reply,
       deadline,
       tokenPromise,
       isCurrent,
+    );
+
+    return finishGroupReply(
+      trigger,
+      outcome,
+      continuation ? "active" : "mention",
     );
   }
 
@@ -236,6 +276,7 @@ export function createProcessor(env, overrides = {}) {
 
     if (outcome.status === "replied") {
       await store.markAutonomousReply(trigger.conversationId);
+      await finishGroupReply(trigger, outcome, "autonomous");
     }
 
     return outcome;
@@ -264,12 +305,45 @@ export function createProcessor(env, overrides = {}) {
     // treated as addressed and the newest message carries the reply.
     const trigger = { ...lastMessage, wasMentioned: mentioned };
 
+    // Active chat: a group the bot just replied in stays warm for a while.
+    // The person the bot was talking to gets the reply path directly; other
+    // members still go through the model decision.
+    const activeWindow =
+      trigger.scope === "group"
+        ? await store.getActiveWindow(conversationId)
+        : { until: 0, speaker: null };
+
+    const now = deps.now();
+    const windowOpen = activeWindow.until > now;
+    const speakerContinues =
+      windowOpen &&
+      activeWindow.speaker !== null &&
+      trigger.memberOpenid === activeWindow.speaker;
+
+    const route =
+      trigger.scope === "c2c"
+        ? "private"
+        : mentioned
+          ? "mention"
+          : speakerContinues
+            ? "active"
+            : "autonomous";
+
+    deps.logger.log(`Route: ${route}`, {
+      conversationId,
+      batchId: batch.id,
+      mentioned,
+      activeUntil: activeWindow.until,
+      activeSpeaker: activeWindow.speaker,
+    });
+
     deps.logger.log("Batch trigger:", {
       conversationId,
       batchId: batch.id,
       revision: batch.revision,
       messages: messages.length,
       mentioned,
+      route,
       sender: trigger.senderName,
       contentLength: trigger.content.length,
     });
@@ -287,12 +361,23 @@ export function createProcessor(env, overrides = {}) {
     }
 
     if (mentioned) {
-      return replyToGroupMention(
+      return replyToAddressedGroupMessage(
         trigger,
         session,
         deadline,
         tokenPromise,
         context.isCurrent,
+      );
+    }
+
+    if (speakerContinues) {
+      return replyToAddressedGroupMessage(
+        trigger,
+        session,
+        deadline,
+        tokenPromise,
+        context.isCurrent,
+        true,
       );
     }
 

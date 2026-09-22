@@ -33,7 +33,7 @@ Durable Object「ConversationHub」（每个会话一个）
 | `src/conversation-hub.js` | Durable Object 封装：每个会话一个实例，持有协调器 storage 与 alarm |
 | `src/processor.js` | 批次处理器：生成、revision 检查、发送、assistant 落库 |
 | `src/pure.js` | 纯函数：消息解析、提示词组装、Markdown 清理、分条 |
-| `src/store.js` | D1 读写：会话、消息、冷却状态 |
+| `src/store.js` | D1 读写：会话、消息、自主发言冷却与活跃期状态 |
 | `src/token.js` | QQ access_token 获取与 D1 缓存 |
 | `src/llm.js` | DeepSeek 调用与图片失败回退 |
 | `src/sender.js` | 分条发送、超时重试、时间预算控制 |
@@ -66,7 +66,7 @@ npm run check    # 只跑语法检查
 - 模型调用与 QQ 发送：脚本化 `fetch`，可以按调用次数返回成功、HTTP 错误或网络异常
 - 会话协调器：`test/support/hub.js` 把 alarm 变成手动时钟上的待办，按 conversationId 模拟「每个会话一个 Durable Object」；测试用 `hub.runAllAlarms()` 驱动防抖、重试与看门狗
 
-当前基线覆盖：webhook 验签与 op:13 回调、事件去重、同会话消息按到达顺序合并为一个批次、生成期间新消息的 revision 拦截、跨会话并行、alarm 失败重试与失效实例接管、上下文合并、分条发送、发送失败不落库、网络失败重试、图片请求失败回退纯文本、私聊错误兜底、群聊 `NO_REPLY` 与自主发言冷却、消息解析。
+当前基线覆盖：webhook 验签与 op:13 回调、事件去重、同会话消息按到达顺序合并为一个批次、生成期间新消息的 revision 拦截、跨会话并行、alarm 失败重试与失效实例接管、上下文合并、分条发送、发送失败不落库、网络失败重试、图片请求失败回退纯文本、私聊错误兜底、群聊 `NO_REPLY`、活跃期续句必回、其他成员仍由模型判断、窗口过期回落、冷却不吞续聊、消息解析。
 
 本地起 Worker：
 
@@ -120,7 +120,7 @@ npx wrangler d1 migrations apply qq-ai-bot-db --remote   # 远程
 - 全新数据库：直接执行，会建出全部表和索引。
 - 从手工部署迁移过来的数据库：执行也是安全的，不会覆盖已有数据；执行后 Wrangler 会把它记录为已应用。
 
-未来的 schema 变更以新的迁移文件追加，不要修改已应用过的迁移。
+未来的 schema 变更以新的迁移文件追加，不要修改已应用过的迁移。拉到的版本如果新增了 `db/migrations/*.sql`，先执行本节命令再部署。
 
 Durable Object 不需要手工建表：`wrangler.toml` 里的 `[[migrations]] tag = "v1"` 会在 `wrangler deploy` 时创建 `ConversationHub` 类；每个会话的协调状态存在对象自己的 storage 里，与 D1 解耦。
 
@@ -175,8 +175,9 @@ npx wrangler deploy --dry-run --outdir dist
 | 会话串行 | 同一会话的生成、发送和状态写入在同一协调器内串行；不同会话在不同 Durable Object 上并行 |
 | revision 检查 | 生成期间有新消息时，旧结果在发送前被丢弃；分条发送中途也会检查，新消息到达就停止剩余气泡 |
 | alarm 恢复 | 批次先写入 Durable Object storage 再处理；实例崩溃后下一个 alarm 接管，失败自动重试并记录错误 |
+| 活跃聊天 | 群聊里机器人回复后进入 90 秒活跃期；原发言者的未 @ 续句直接进入回复路径，其他成员仍由模型判断 |
 | 分条发送 | 模型用 `\|\|\|` 分隔多条，最多 3 条，`msg_seq` 递增，条间隔随机 |
-| 自主发言冷却 | 群聊中未被 @ 时，两次主动发言之间随机冷却 |
+| 自主发言冷却 | 群聊中未被 @ 时，新话题的主动发言之间随机冷却；活跃期内原发言者的续句不受冷却影响 |
 | 思考模式 | 全部场景 `thinking: enabled` + `reasoning_effort: low` |
 | 决策协议 | 模型输出 `NO_REPLY` 表示不回复，其他内容视为回复 |
 | 图片识别 | 图片 URL 直传多模态；失败自动回退纯文本重试；引用消息里的图片也会被收集 |
@@ -201,7 +202,8 @@ npx wrangler deploy --dry-run --outdir dist
 | `PROCESSING_STALE_MS` | 45000 | 批次超过这个时间未完成视为实例失效，下个 alarm 接管 |
 | `PROCESSING_RETRY_DELAY_MS` | 5000 | 批次处理失败后的重试间隔 |
 | `MAX_PROCESSING_ATTEMPTS` | 3 | 同一批次最大处理次数，超过后丢弃并保留失败记录 |
-| `AUTONOMOUS_COOLDOWN_MIN_MS` / `MAX` | 15000 / 45000 | 自主发言冷却区间 |
+| `AUTONOMOUS_COOLDOWN_MIN_MS` / `MAX` | 15000 / 45000 | 自主发言冷却区间（只作用于新话题插话） |
+| `ACTIVE_WINDOW_MS` | 90000 | 群聊活跃期长度（机器人回复后） |
 | `INVOCATION_BUDGET_MS` | 28000 | 单次批次处理的内部预算（LLM、发送与分条的总上限） |
 | `SEND_BUDGET_RESERVE_MS` | 8000 | 留给发送的时间 |
 | `LLM_TIMEOUT_MS` | 12000 | 单次模型调用上限 |
@@ -221,6 +223,8 @@ stage=coordinator alarm deferred      alarm 在批次处理中提前触发，不
 stage=coordinator recovering stale batch  旧实例的批次被新 alarm 接管
 stage=coordinator batch retry scheduled   批次失败，已安排重试（attempt）
 stage=coordinator batch abandoned         超过重试上限，保留 failed_batch 记录
+Route: active / mention / autonomous      本批次走的路由
+Active window opened:                     机器人回复后开启 90 秒活跃期
 Context loaded: N messages 上下文加载完成
 Decision: reply / no reply 自主发言判断结果
 Autonomous reply skipped   命中冷却
@@ -237,6 +241,7 @@ LLM time budget exhausted  模型时间不够（需要调小防抖或关闭思�
 - 频繁 `LLM time budget exhausted`：调小 `DEBOUNCE_GROUP_MIN_MS/MAX_MS`，或自主发言改回不思考
 - 频繁 `stage=send` 超时：QQ 接口偶发慢，属网络波动；连续出现可考虑 Cloudflare Queue
 - 频繁 `recovering stale batch`：说明单次生成超过 `PROCESSING_STALE_MS` 或实例频繁被驱逐，检查 LLM 耗时
+- 群里明明在对话却判 `NO_REPLY`：检查是否在 `ACTIVE_WINDOW_MS` 内、消息是否来自最后被回复的那个人；其他人的消息仍会走模型判断
 - 想清空聊天记忆：D1 控制台执行 `DELETE FROM messages; DELETE FROM conversations;`（`settings` 表不要动）
 
 ## 已知限制

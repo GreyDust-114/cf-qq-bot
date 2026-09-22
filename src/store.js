@@ -152,6 +152,46 @@ export function createStore(deps) {
     }
   }
 
+  // Active chat window: the bot just replied in this group. `speaker` is the
+  // member whose message carried the reply; their follow-ups can continue the
+  // conversation without another @ or a model decision.
+  async function markActiveWindow(conversationId, speaker, until) {
+    try {
+      await db()
+        .prepare(
+          `UPDATE conversations
+           SET active_until = ?, active_speaker_member_openid = ?,
+               updated_at = ?
+           WHERE conversation_id = ?`,
+        )
+        .bind(until, speaker ?? null, deps.now(), conversationId)
+        .run();
+    } catch (error) {
+      deps.logger.error("active window write failed:", error);
+    }
+  }
+
+  async function getActiveWindow(conversationId) {
+    try {
+      const row = await db()
+        .prepare(
+          `SELECT active_until, active_speaker_member_openid
+           FROM conversations
+           WHERE conversation_id = ?`,
+        )
+        .bind(conversationId)
+        .first();
+
+      return {
+        until: Number(row?.active_until ?? 0),
+        speaker: row?.active_speaker_member_openid ?? null,
+      };
+    } catch (error) {
+      deps.logger.error("active window read failed:", error);
+      return { until: 0, speaker: null };
+    }
+  }
+
   return {
     ensureConversation,
     storeIncomingMessage,
@@ -159,5 +199,7 @@ export function createStore(deps) {
     storeAssistantMessage,
     getNextAutonomousAt,
     markAutonomousReply,
+    markActiveWindow,
+    getActiveWindow,
   };
 }

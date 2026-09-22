@@ -13,6 +13,7 @@ import {
 import {
   GROUP_SYSTEM_PROMPT,
   GROUP_MENTION_SYSTEM_PROMPT,
+  GROUP_CONTINUATION_SYSTEM_PROMPT,
   PRIVATE_SYSTEM_PROMPT,
 } from "./prompts.js";
 
@@ -472,7 +473,9 @@ export function buildGroupMessages(context, incoming, options = {}) {
       role: "system",
       content: decision
         ? GROUP_SYSTEM_PROMPT
-        : GROUP_MENTION_SYSTEM_PROMPT,
+        : options.continuation
+          ? GROUP_CONTINUATION_SYSTEM_PROMPT
+          : GROUP_MENTION_SYSTEM_PROMPT,
     },
     {
       role: "system",
@@ -509,6 +512,10 @@ export function buildGroupMessages(context, incoming, options = {}) {
       text += incoming.wasMentioned
         ? "\n\n[系统提示] 这条消息明确 @ 了你，必须回复。"
         : "\n\n[系统提示] 这条消息没有 @ 你，请按群聊规则判断是否需要回复。";
+    } else if (isCurrent && options.continuation) {
+      text +=
+        "\n\n[系统提示] 这条消息来自刚刚和你聊过的群友，" +
+        "是刚才话题的继续，请直接自然地接话。";
     }
 
     if (
