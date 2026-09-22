@@ -1,7 +1,6 @@
 import {
   MIN_STAGE_BUDGET_MS,
   PART_GAP_MAX_MS,
-  PART_GAP_MIN_MS,
   QQ_API_BASE_URL,
   SEND_RETRY_TIMEOUT_MS,
   SEND_TIMEOUT_MS,
@@ -9,8 +8,7 @@ import {
 
 import {
   isRetryableSendError,
-  randomBetween,
-  splitReplyParts,
+  replyPartGapMs,
 } from "./pure.js";
 
 export function createReplySender(deps, tokenManager) {
@@ -129,12 +127,14 @@ export function createReplySender(deps, tokenManager) {
 
   async function sendReplyParts(
     incoming,
-    replyText,
+    messages,
     deadline,
     tokenPromise = null,
     shouldContinue = null,
   ) {
-    const parts = splitReplyParts(replyText);
+    const parts = (Array.isArray(messages) ? messages : [])
+      .map((part) => String(part ?? "").trim())
+      .filter(Boolean);
 
     if (parts.length === 0) {
       return { sentTexts: [], reason: "empty" };
@@ -168,11 +168,7 @@ export function createReplySender(deps, tokenManager) {
         }
 
         await deps.sleep(
-          randomBetween(
-            PART_GAP_MIN_MS,
-            PART_GAP_MAX_MS,
-            deps.random,
-          ),
+          replyPartGapMs(parts[index - 1], deps.random),
         );
       }
 

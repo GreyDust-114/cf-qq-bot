@@ -7,6 +7,9 @@ import {
   MAX_IMAGE_URL_LENGTH,
   MAX_REPLY_CHARS,
   MAX_REPLY_PARTS,
+  PART_GAP_MAX_MS,
+  PART_GAP_MIN_MS,
+  PART_GAP_PER_CHAR_MS,
   STORED_CONTENT_MAX_CHARS,
 } from "./config.js";
 
@@ -371,13 +374,114 @@ export function mdToPlain(md) {
   return value.trim();
 }
 
-export function splitReplyParts(text) {
-  return String(text ?? "")
-    .split("|||")
-    .map((part) => mdToPlain(part))
+// Reply pacing: a bubble is followed by a gap proportional to its length,
+// bounded to a natural typing rhythm. `random` is injected so tests are
+// deterministic.
+export function replyPartGapMs(previousText, random) {
+  const length = String(previousText ?? "").length;
+  const base = Math.min(
+    PART_GAP_MAX_MS,
+    PART_GAP_MIN_MS + length * PART_GAP_PER_CHAR_MS,
+  );
+  const jitter = 0.85 + random() * 0.3;
+
+  return Math.round(base * jitter);
+}
+
+function stripCodeFence(value) {
+  const fenced = value.match(
+    /^```[a-zA-Z0-9_+-]*\s*\n?([\s\S]*?)\n?```$/,
+  );
+
+  return fenced ? fenced[1].trim() : value;
+}
+
+function finalizeReplyMessages(items) {
+  const dropped = items.some((item) => typeof item !== "string");
+  const messages = items
+    .filter((item) => typeof item === "string")
+    .map((item) => mdToPlain(item))
     .filter(Boolean)
-    .slice(0, MAX_REPLY_PARTS)
-    .map((part) => truncateReply(part));
+    .map((item) => truncateReply(item));
+
+  if (messages.length === 0) {
+    return { kind: "empty", messages: [], warning: null };
+  }
+
+  if (messages.length > MAX_REPLY_PARTS) {
+    const kept = messages.slice(0, MAX_REPLY_PARTS);
+    const overflow = messages.slice(MAX_REPLY_PARTS);
+
+    kept[kept.length - 1] = truncateReply(
+      `${kept[kept.length - 1]} ${overflow.join(" ")}`,
+    );
+
+    return { kind: "messages", messages: kept, warning: "merged-overflow" };
+  }
+
+  return {
+    kind: "messages",
+    messages,
+    warning: dropped ? "non-string-bubble" : null,
+  };
+}
+
+// Parses the model's structured reply protocol:
+//   {"messages":["...", "..."]}  -> one to three complete bubbles
+//   {"silent":true}                -> no reply (autonomous decision)
+// Truncated JSON is rejected outright instead of being sent as text. Plain
+// text is accepted as a single-bubble fallback so an old/invalid model output
+// still produces something reasonable, and the fallback is observable in logs.
+export function parseReplyOutput(raw) {
+  const text = stripCodeFence(String(raw ?? "").trim());
+
+  if (!text) {
+    return { kind: "empty", messages: [], warning: null };
+  }
+
+  if (text.startsWith("{") || text.startsWith("[")) {
+    let parsed;
+
+    try {
+      parsed = JSON.parse(text);
+    } catch {
+      return { kind: "invalid", messages: [], warning: "json-parse" };
+    }
+
+    if (parsed !== null && typeof parsed === "object") {
+      if (parsed.silent === true) {
+        return { kind: "silent", messages: [], warning: null };
+      }
+
+      const list = Array.isArray(parsed)
+        ? parsed
+        : Array.isArray(parsed.messages)
+          ? parsed.messages
+          : null;
+
+      if (list !== null) {
+        return finalizeReplyMessages(list);
+      }
+    }
+
+    return { kind: "invalid", messages: [], warning: "json-shape" };
+  }
+
+  if (/^no_reply\b/i.test(text)) {
+    return { kind: "silent", messages: [], warning: null };
+  }
+
+  if (text.includes("|||")) {
+    return {
+      ...finalizeReplyMessages(text.split("|||")),
+      warning: "legacy-separator",
+    };
+  }
+
+  return {
+    ...finalizeReplyMessages([text]),
+    warning: "plain-text-fallback",
+  };
 }
 
 export function mergeConsecutiveUserMessages(rows) {
@@ -546,29 +650,6 @@ export function buildGroupMessages(context, incoming, options = {}) {
   }
 
   return messages;
-}
-
-export function parseGroupDecision(raw) {
-  const text = String(raw ?? "").trim();
-
-  if (!text) {
-    return { kind: "empty", content: "" };
-  }
-
-  const normalized = text
-    .replace(/^["'“”‘’「」\s]+/, "")
-    .replace(/["'“”‘’「」\s]+$/, "")
-    .trim();
-
-  if (!normalized) {
-    return { kind: "empty", content: "" };
-  }
-
-  if (/^no_reply\b/i.test(normalized)) {
-    return { kind: "no_reply", content: "" };
-  }
-
-  return { kind: "reply", content: normalized };
 }
 
 export function isRetryableSendError(error) {

@@ -11,8 +11,9 @@ export const STORED_CONTENT_MAX_CHARS = 2000;
 export const MAX_REPLY_CHARS = 1800;
 
 export const MAX_REPLY_PARTS = 3;
-export const PART_GAP_MIN_MS = 400;
-export const PART_GAP_MAX_MS = 1200;
+export const PART_GAP_MIN_MS = 300;
+export const PART_GAP_MAX_MS = 1500;
+export const PART_GAP_PER_CHAR_MS = 30;
 
 export const DEBOUNCE_MENTION_MIN_MS = 3 * 1000;
 export const DEBOUNCE_MENTION_MAX_MS = 5 * 1000;

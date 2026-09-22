@@ -5,10 +5,12 @@ import { Buffer } from "node:buffer";
 import {
   cleanContent,
   mdToPlain,
-  parseGroupDecision,
   parseIncomingMessage,
-  splitReplyParts,
+  parseReplyOutput,
+  replyPartGapMs,
 } from "../src/pure.js";
+
+import { PART_GAP_MAX_MS, PART_GAP_MIN_MS } from "../src/config.js";
 
 import { buildC2cPayload, buildGroupPayload, createTestEnv } from "./support/index.js";
 
@@ -116,31 +118,74 @@ test("parseIncomingMessage ignores messages from other groups", () => {
   assert.equal(incoming, null);
 });
 
-test("splitReplyParts cleans markdown and caps at three parts", () => {
-  const parts = splitReplyParts(
-    "**加粗**|||`代码`|||第三|||第四",
+test("parseReplyOutput accepts a structured message array", () => {
+  const parsed = parseReplyOutput(
+    '{"messages":["第一句","第二句","第三句"]}',
   );
 
-  assert.deepEqual(parts, ["加粗", "代码", "第三"]);
+  assert.equal(parsed.kind, "messages");
+  assert.deepEqual(parsed.messages, ["第一句", "第二句", "第三句"]);
+  assert.equal(parsed.warning, null);
 });
 
-test("parseGroupDecision recognizes NO_REPLY and quoted replies", () => {
-  assert.deepEqual(parseGroupDecision("NO_REPLY"), {
-    kind: "no_reply",
-    content: "",
-  });
-  assert.deepEqual(parseGroupDecision("no_reply，因为没必要"), {
-    kind: "no_reply",
-    content: "",
-  });
-  assert.deepEqual(parseGroupDecision("「好呀」"), {
-    kind: "reply",
-    content: "好呀",
-  });
-  assert.deepEqual(parseGroupDecision("   "), {
-    kind: "empty",
-    content: "",
-  });
+test("parseReplyOutput unwraps fenced JSON and cleans each bubble", () => {
+  const parsed = parseReplyOutput(
+    '```json\n{"messages":["**加粗**","`代码`"]}\n```',
+  );
+
+  assert.equal(parsed.kind, "messages");
+  assert.deepEqual(parsed.messages, ["加粗", "代码"]);
+});
+
+test("parseReplyOutput merges overflow bubbles instead of dropping them", () => {
+  const parsed = parseReplyOutput(
+    '{"messages":["一","二","三","四","五"]}',
+  );
+
+  assert.equal(parsed.kind, "messages");
+  assert.deepEqual(parsed.messages, ["一", "二", "三 四 五"]);
+  assert.equal(parsed.warning, "merged-overflow");
+});
+
+test("parseReplyOutput rejects truncated JSON instead of half of it", () => {
+  const parsed = parseReplyOutput('{"messages":["一","二"');
+
+  assert.equal(parsed.kind, "invalid");
+  assert.deepEqual(parsed.messages, []);
+  assert.equal(parsed.warning, "json-parse");
+});
+
+test("parseReplyOutput recognizes silent and legacy NO_REPLY", () => {
+  assert.equal(parseReplyOutput('{"silent":true}').kind, "silent");
+  assert.equal(parseReplyOutput("NO_REPLY").kind, "silent");
+  assert.equal(parseReplyOutput("   ").kind, "empty");
+});
+
+test("parseReplyOutput falls back to a single plain-text bubble", () => {
+  const parsed = parseReplyOutput("就是普通的一句话");
+
+  assert.equal(parsed.kind, "messages");
+  assert.deepEqual(parsed.messages, ["就是普通的一句话"]);
+  assert.equal(parsed.warning, "plain-text-fallback");
+});
+
+test("parseReplyOutput keeps the legacy separator fallback observable", () => {
+  const parsed = parseReplyOutput("一|||二");
+
+  assert.equal(parsed.kind, "messages");
+  assert.deepEqual(parsed.messages, ["一", "二"]);
+  assert.equal(parsed.warning, "legacy-separator");
+});
+
+test("replyPartGapMs grows with the previous bubble and stays bounded", () => {
+  const random = () => 0.5;
+
+  assert.equal(replyPartGapMs("", random), PART_GAP_MIN_MS);
+  assert.equal(replyPartGapMs("x".repeat(500), random), PART_GAP_MAX_MS);
+  assert.ok(
+    replyPartGapMs("好的", random) <
+      replyPartGapMs("这是一条明显更长的消息内容", random),
+  );
 });
 
 test("mdToPlain converts links and removes code fences", () => {

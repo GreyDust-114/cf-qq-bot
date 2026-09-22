@@ -17,7 +17,7 @@ import { createTokenManager } from "./token.js";
 import {
   buildGroupMessages,
   buildPrivateMessages,
-  parseGroupDecision,
+  parseReplyOutput,
 } from "./pure.js";
 
 const ERROR_REPLY = "AI 服务暂时无法响应，请稍后再试。";
@@ -51,7 +51,7 @@ export function createProcessor(env, overrides = {}) {
 
   async function sendAndStore(
     trigger,
-    content,
+    messages,
     deadline,
     tokenPromise,
     isCurrent,
@@ -67,7 +67,7 @@ export function createProcessor(env, overrides = {}) {
 
     const sendResult = await sender.sendReplyParts(
       trigger,
-      content,
+      messages,
       deadline,
       tokenPromise,
       isCurrent,
@@ -130,6 +130,28 @@ export function createProcessor(env, overrides = {}) {
     return outcome;
   }
 
+  // Turns the model's raw output into validated bubbles. Invalid or empty
+  // structured output falls back to a safe single bubble instead of sending
+  // half-parsed JSON; the fallback and any merge are always logged.
+  function resolveReplyMessages(raw, route, fallback) {
+    const parsed = parseReplyOutput(raw);
+
+    if (parsed.warning) {
+      deps.logger.log(`Reply parse warning: ${parsed.warning}`, {
+        route,
+      });
+    }
+
+    if (parsed.kind === "messages") {
+      return parsed.messages;
+    }
+
+    deps.logger.error(
+      `stage=reply ${parsed.kind} (${route}), using safe fallback`,
+    );
+    return [fallback];
+  }
+
   async function replyToPrivateMessage(
     trigger,
     context,
@@ -138,10 +160,10 @@ export function createProcessor(env, overrides = {}) {
     isCurrent,
   ) {
     const hasImages = trigger.imageUrls.length > 0;
-    let reply;
+    let raw;
 
     try {
-      reply = await llm.callDeepSeekWithFallback(
+      raw = await llm.callDeepSeekWithFallback(
         (includeImages) =>
           buildPrivateMessages(context, trigger, {
             includeImages,
@@ -153,12 +175,18 @@ export function createProcessor(env, overrides = {}) {
       );
     } catch (error) {
       deps.logger.error("stage=llm private failed:", error);
-      reply = ERROR_REPLY;
+      return sendAndStore(
+        trigger,
+        [ERROR_REPLY],
+        deadline,
+        tokenPromise,
+        isCurrent,
+      );
     }
 
     return sendAndStore(
       trigger,
-      reply,
+      resolveReplyMessages(raw, "private", ERROR_REPLY),
       deadline,
       tokenPromise,
       isCurrent,
@@ -174,10 +202,11 @@ export function createProcessor(env, overrides = {}) {
     continuation = false,
   ) {
     const hasImages = trigger.imageUrls.length > 0;
-    let reply;
+    const route = continuation ? "active" : "mention";
+    let raw;
 
     try {
-      reply = await llm.callDeepSeekWithFallback(
+      raw = await llm.callDeepSeekWithFallback(
         (includeImages) =>
           buildGroupMessages(context, trigger, {
             decision: false,
@@ -196,22 +225,25 @@ export function createProcessor(env, overrides = {}) {
           : "stage=llm mention failed:",
         error,
       );
-      reply = MENTION_FALLBACK_REPLY;
+      const outcome = await sendAndStore(
+        trigger,
+        [MENTION_FALLBACK_REPLY],
+        deadline,
+        tokenPromise,
+        isCurrent,
+      );
+      return finishGroupReply(trigger, outcome, route);
     }
 
     const outcome = await sendAndStore(
       trigger,
-      reply,
+      resolveReplyMessages(raw, route, MENTION_FALLBACK_REPLY),
       deadline,
       tokenPromise,
       isCurrent,
     );
 
-    return finishGroupReply(
-      trigger,
-      outcome,
-      continuation ? "active" : "mention",
-    );
+    return finishGroupReply(trigger, outcome, route);
   }
 
   async function decideGroupAutonomous(
@@ -241,20 +273,29 @@ export function createProcessor(env, overrides = {}) {
       return { status: "llm-failed" };
     }
 
-    const decision = parseGroupDecision(raw);
+    const parsed = parseReplyOutput(raw);
 
-    if (decision.kind === "empty") {
-      deps.logger.log("Decision: empty output (treated as no reply)");
-      return { status: "silent" };
+    if (parsed.warning) {
+      deps.logger.log(`Reply parse warning: ${parsed.warning}`, {
+        route: "autonomous",
+      });
     }
 
-    if (decision.kind === "no_reply") {
+    if (parsed.kind === "silent") {
       deps.logger.log("Decision: no reply");
       return { status: "silent" };
     }
 
+    if (parsed.kind !== "messages") {
+      deps.logger.log(
+        `Decision: ${parsed.kind} output (treated as no reply)`,
+      );
+      return { status: "silent" };
+    }
+
     deps.logger.log(
-      `Decision: reply (${decision.content.length} chars)`,
+      `Decision: reply (${parsed.messages.length} bubbles, ` +
+        `${parsed.messages.join("").length} chars)`,
     );
 
     const nextAt = await store.getNextAutonomousAt(
@@ -268,7 +309,7 @@ export function createProcessor(env, overrides = {}) {
 
     const outcome = await sendAndStore(
       trigger,
-      decision.content,
+      parsed.messages,
       deadline,
       tokenPromise,
       isCurrent,

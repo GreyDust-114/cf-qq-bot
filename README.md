@@ -66,7 +66,7 @@ npm run check    # 只跑语法检查
 - 模型调用与 QQ 发送：脚本化 `fetch`，可以按调用次数返回成功、HTTP 错误或网络异常
 - 会话协调器：`test/support/hub.js` 把 alarm 变成手动时钟上的待办，按 conversationId 模拟「每个会话一个 Durable Object」；测试用 `hub.runAllAlarms()` 驱动防抖、重试与看门狗
 
-当前基线覆盖：webhook 验签与 op:13 回调、事件去重、同会话消息按到达顺序合并为一个批次、生成期间新消息的 revision 拦截、跨会话并行、alarm 失败重试与失效实例接管、上下文合并、分条发送、发送失败不落库、网络失败重试、图片请求失败回退纯文本、私聊错误兜底、群聊 `NO_REPLY`、活跃期续句必回、其他成员仍由模型判断、窗口过期回落、冷却不吞续聊、消息解析。
+当前基线覆盖：webhook 验签与 op:13 回调、事件去重、同会话消息按到达顺序合并为一个批次、生成期间新消息的 revision 拦截、跨会话并行、alarm 失败重试与失效实例接管、上下文合并、结构化消息数组与超限合并、截断结构拒绝并兜底、长度自适应发送间隔、中途停发剩余气泡、发送失败不落库、网络失败重试、图片请求失败回退纯文本、私聊错误兜底、群聊 `NO_REPLY`、活跃期续句必回、其他成员仍由模型判断、窗口过期回落、冷却不吞续聊、消息解析。
 
 本地起 Worker：
 
@@ -176,10 +176,10 @@ npx wrangler deploy --dry-run --outdir dist
 | revision 检查 | 生成期间有新消息时，旧结果在发送前被丢弃；分条发送中途也会检查，新消息到达就停止剩余气泡 |
 | alarm 恢复 | 批次先写入 Durable Object storage 再处理；实例崩溃后下一个 alarm 接管，失败自动重试并记录错误 |
 | 活跃聊天 | 群聊里机器人回复后进入 90 秒活跃期；原发言者的未 @ 续句直接进入回复路径，其他成员仍由模型判断 |
-| 分条发送 | 模型用 `\|\|\|` 分隔多条，最多 3 条，`msg_seq` 递增，条间隔随机 |
+| 分条发送 | 模型返回 JSON 消息数组（1～3 条完整气泡），超限合并进最后一条；`msg_seq` 递增，条间隔按上一条长度自适应；非法/截断结构走安全兜底，不发半截内容 |
 | 自主发言冷却 | 群聊中未被 @ 时，新话题的主动发言之间随机冷却；活跃期内原发言者的续句不受冷却影响 |
 | 思考模式 | 全部场景 `thinking: enabled` + `reasoning_effort: low` |
-| 决策协议 | 模型输出 `NO_REPLY` 表示不回复，其他内容视为回复 |
+| 决策协议 | 模型输出 `{"silent":true}` 表示不回复、`{"messages":[...]}` 表示回复；旧 `NO_REPLY` 与纯文本仍兼容兜底 |
 | 图片识别 | 图片 URL 直传多模态；失败自动回退纯文本重试；引用消息里的图片也会被收集 |
 | 引用处理 | 引用内容格式化为 `[引用 某某：原文]`；引用机器人自己的消息视为必回 |
 | 时间感知 | 系统提示注入当前时间（北京时间），历史消息带 `[MM-DD HH:MM]` 时间戳 |
@@ -196,7 +196,8 @@ npx wrangler deploy --dry-run --outdir dist
 | `CONTEXT_MAX_CHARS` | 60000 | 上下文最大字符数 |
 | `MAX_REPLY_CHARS` | 1800 | 单条回复最大长度 |
 | `MAX_REPLY_PARTS` | 3 | 分条发送上限 |
-| `PART_GAP_MIN_MS` / `MAX` | 400 / 1200 | 分条之间的间隔 |
+| `PART_GAP_MIN_MS` / `MAX` | 300 / 1500 | 分条之间的间隔上下限 |
+| `PART_GAP_PER_CHAR_MS` | 30 | 上一条气泡每字符增加的间隔 |
 | `DEBOUNCE_MENTION_MIN_MS` / `MAX` | 3000 / 5000 | @ 消息静默窗口 |
 | `DEBOUNCE_GROUP_MIN_MS` / `MAX` | 6000 / 9000 | 普通消息静默窗口 |
 | `PROCESSING_STALE_MS` | 45000 | 批次超过这个时间未完成视为实例失效，下个 alarm 接管 |
@@ -225,6 +226,10 @@ stage=coordinator batch retry scheduled   批次失败，已安排重试（attem
 stage=coordinator batch abandoned         超过重试上限，保留 failed_batch 记录
 Route: active / mention / autonomous      本批次走的路由
 Active window opened:                     机器人回复后开启 90 秒活跃期
+Reply parse warning: merged-overflow      超过 3 条，已合并进最后一条
+Reply parse warning: plain-text-fallback  模型返回纯文本，按单条气泡兜底
+stage=reply invalid                       结构化输出无法解析，使用安全兜底
+Reply parts: newer messages arrived, stopping  新消息到达，停止剩余气泡
 Context loaded: N messages 上下文加载完成
 Decision: reply / no reply 自主发言判断结果
 Autonomous reply skipped   命中冷却
