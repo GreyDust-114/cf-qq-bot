@@ -1,4 +1,4 @@
-// Syntax-check every source file that ships with the Worker.
+// Syntax-check project JavaScript: Worker sources, dev scripts and tests.
 // Works on Windows and POSIX without shell glob expansion.
 
 import { execFileSync } from "node:child_process";
@@ -11,9 +11,20 @@ const root = path.resolve(
   "..",
 );
 
-const files = readdirSync(path.join(root, "src"))
-  .filter((name) => name.endsWith(".js"))
-  .map((name) => `src/${name}`);
+const targets = ["src", "scripts", "test"];
+const files = [];
+
+for (const target of targets) {
+  for (const entry of readdirSync(path.join(root, target), {
+    recursive: true,
+  })) {
+    const relative = `${target}/${String(entry).replaceAll("\\", "/")}`;
+
+    if (relative.endsWith(".js") || relative.endsWith(".mjs")) {
+      files.push(relative);
+    }
+  }
+}
 
 for (const file of files) {
   execFileSync(process.execPath, ["--check", file], {

@@ -9,7 +9,7 @@ import {
   createTestContext,
   jsonResponse,
   listMessages,
-} from "./helpers.js";
+} from "./support/index.js";
 
 const PKCS8_PREFIX = Buffer.from(
   "302e020100300506032b657004220420",

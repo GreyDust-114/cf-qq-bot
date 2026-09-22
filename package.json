@@ -5,6 +5,7 @@
   "type": "module",
   "description": "QQ official bot on Cloudflare Workers + D1 + DeepSeek",
   "scripts": {
+    "setup": "git config core.hooksPath .githooks && git config commit.template .gitmessage",
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
     "test": "node --test \"test/*.test.js\"",

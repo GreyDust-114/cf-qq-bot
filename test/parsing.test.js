@@ -10,7 +10,7 @@ import {
   splitReplyParts,
 } from "../src/pure.js";
 
-import { buildC2cPayload, buildGroupPayload, createTestEnv } from "./helpers.js";
+import { buildC2cPayload, buildGroupPayload, createTestEnv } from "./support/index.js";
 
 const env = createTestEnv();
 

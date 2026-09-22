@@ -32,17 +32,22 @@ Cloudflare Worker（Wrangler 项目）
 | `src/dependencies.js` | 依赖注入接缝：时钟、sleep、随机、fetch、logger |
 | `src/prompts.js` | 全部提示词：人设「新約エクシア」+ 群聊决策 / @ 回复 / 私聊 |
 | `db/migrations/` | D1 schema 迁移文件 |
-| `test/` | 离线回归测试（Node 内置 test runner） |
+| `test/` | 离线回归测试（Node 内置 test runner）；`test/support/` 放测试环境：内存 D1 adapter、假 fetch、手动时钟、payload 构造器 |
+| `scripts/` | 开发工具：语法检查、提交信息校验 |
+| `.githooks/` `.gitmessage` | commit-msg 钩子与提交模板 |
 | `wrangler.toml` | Wrangler 项目配置：入口、D1 绑定、变量 |
 
 ## 本地开发与测试
 
 ```powershell
 npm install
-npm run verify   # 语法检查 + 离线回归测试（27 个）
+npm run setup    # 配置 commit-msg 钩子与 .gitmessage 模板
+npm run verify   # 语法检查 + 离线回归测试
 npm run test     # 只跑测试
 npm run check    # 只跑语法检查
 ```
+
+提交信息使用中文，标题形如 `[修复] 一句话说明`，正文说明目的、影响和验证；规则与标签见 `AGENTS.md` 的「Git 提交规范」。
 
 测试不访问网络、不依赖 Cloudflare 账号，通过依赖注入覆盖以下接缝：
 

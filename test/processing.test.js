@@ -9,7 +9,7 @@ import {
   listMessages,
   parseSendBody,
   waitFor,
-} from "./helpers.js";
+} from "./support/index.js";
 
 test("consecutive messages: earlier one defers, latest replies with merged context", async () => {
   const ctx = createTestContext({
