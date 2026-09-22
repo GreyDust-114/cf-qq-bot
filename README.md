@@ -127,11 +127,11 @@ Durable Object 不需要手工建表：`wrangler.toml` 里的 `[[migrations]] ta
 ### 5. 部署与验证
 
 ```powershell
-npx wrangler deploy --keep-vars   # 保留控制台里已设置的明文变量（如灰度群 openid）
+npx wrangler deploy
 npx wrangler tail                 # 实时日志
 ```
 
-`ALLOWED_GROUP_OPENID` 等仅属于当前环境的值可以只在控制台/首次部署时设置，之后用 `--keep-vars` 避免被 `wrangler.toml` 里的空值覆盖；机密始终由 `wrangler secret` 管理，不受影响。
+非机密变量以 `wrangler.toml` 的 `[vars]` 为准（例如灰度群 `ALLOWED_GROUP_OPENID`），每次部署都会写入；机密由 `wrangler secret` 管理，不会被覆盖。若只想更新单个变量，也可以改完配置后直接重新部署。
 
 部署成功后访问 `https://<worker域名>/`，应返回 `QQ AI Bot is running.`。随后在 QQ 开放平台把回调地址指向 `https://<worker域名>/qq/webhook`。
 
@@ -158,7 +158,7 @@ npx wrangler deploy --dry-run --outdir dist
 | `LLM_API_KEY` | Secret | DeepSeek API Key |
 | `LLM_BASE_URL` | 变量 | `https://api.deepseek.com` |
 | `LLM_MODEL` | 变量 | `deepseek-flash` |
-| `ALLOWED_GROUP_OPENID` | 变量 | 只响应这个群；留空表示不限制 |
+| `ALLOWED_GROUP_OPENID` | 变量 | 只响应这个群；留空表示不限制（当前填灰度群 openid） |
 
 ## QQ 开放平台
 

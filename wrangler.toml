@@ -26,6 +26,5 @@ new_sqlite_classes = ["ConversationHub"]
 QQ_APP_ID = "1905655830"
 LLM_BASE_URL = "https://api.deepseek.com"
 LLM_MODEL = "deepseek-flash"
-# 灰度限制：生产环境用 `npx wrangler deploy --keep-vars` 保留已部署值；
-# 需要固定到仓库时再填入群 openid。
-ALLOWED_GROUP_OPENID = ""
+# 灰度限制：只响应这个群；留空表示不限制。该值随 wrangler.toml 一起部署。
+ALLOWED_GROUP_OPENID = "5379C33D957A44282C34543409A92F1A"
