@@ -7,7 +7,12 @@
 // successful send. Stale output (a newer revision or a lost lease) is dropped
 // before the first bubble and re-checked between bubbles.
 
-import { ACTIVE_WINDOW_MS, INVOCATION_BUDGET_MS } from "./config.js";
+import {
+  ACTIVE_WINDOW_MS,
+  INVOCATION_BUDGET_MS,
+  MIN_STAGE_BUDGET_MS,
+  PART_GAP_MAX_MS,
+} from "./config.js";
 import { createDependencies } from "./dependencies.js";
 import { createLlmClient } from "./llm.js";
 import { createReplySender } from "./sender.js";
@@ -18,6 +23,8 @@ import {
   buildGroupMessages,
   buildPrivateMessages,
   parseReplyOutput,
+  replyPartGapMs,
+  stripTimePrefix,
 } from "./pure.js";
 
 const ERROR_REPLY = "AI 服务暂时无法响应，请稍后再试。";
@@ -49,58 +56,189 @@ export function createProcessor(env, overrides = {}) {
     });
   }
 
+  // Sends the validated bubbles one by one and records every state change in
+  // the outbox: a pending row exists before each network call, and a sent row
+  // plus its own assistant message are written immediately afterwards. A
+  // batch re-run skips bubbles that are already sent (stable msg_seq keeps a
+  // resend idempotent on the QQ side) and never retries uncertain sends.
   async function sendAndStore(
     trigger,
     messages,
     deadline,
     tokenPromise,
     isCurrent,
+    batchMeta,
   ) {
-    const gate = await isCurrent();
+    const parts = (Array.isArray(messages) ? messages : [])
+      .filter((part) => typeof part === "string" && part.trim().length > 0)
+      .map((part) => stripTimePrefix(part.trim()))
+      .filter(Boolean);
 
-    if (!gate?.current) {
-      deps.logger.log(
-        `Coordinator: dropping stale reply (${gate?.reason ?? "unknown"})`,
-      );
-      return { status: "stale", reason: gate?.reason ?? "unknown" };
+    if (parts.length === 0) {
+      return { status: "empty", sentTexts: [], stopped: "empty" };
     }
 
-    const sendResult = await sender.sendReplyParts(
-      trigger,
-      messages,
-      deadline,
-      tokenPromise,
-      isCurrent,
+    const base = {
+      conversationId: trigger.conversationId,
+      batchId: batchMeta.batchId,
+      revision: batchMeta.revision,
+      route: batchMeta.route,
+      triggerEventId: trigger.eventId ?? null,
+    };
+
+    await store.ensureOutboxParts(
+      parts.map((content, index) => ({
+        ...base,
+        partIndex: index + 1,
+        msgSeq: index + 1,
+        content,
+      })),
     );
 
-    if (sendResult.sentTexts.length === 0) {
-      deps.logger.error(
-        "Reply not stored; send failed:",
-        sendResult.reason,
+    const sentTexts = [];
+    let stopped = null;
+
+    for (let index = 0; index < parts.length; index += 1) {
+      const partIndex = index + 1;
+      const existing = await store.getOutboxPart(
+        base.batchId,
+        partIndex,
       );
-      return {
-        status:
-          sendResult.reason === "superseded" ? "stale" : "send-failed",
-        reason: sendResult.reason,
-      };
+
+      if (existing?.status === "sent") {
+        // Already delivered before a crash/retry: repair the assistant link
+        // if needed, but never send the bubble again.
+        if (!existing.assistant_message_id) {
+          const assistantId = await store.storeAssistantMessage(
+            trigger.conversationId,
+            existing.content,
+          );
+
+          await store.markOutboxAssistant(
+            base.batchId,
+            partIndex,
+            assistantId,
+          );
+        }
+
+        sentTexts.push(existing.content);
+        continue;
+      }
+
+      if (
+        existing?.status === "failed" ||
+        existing?.status === "uncertain"
+      ) {
+        deps.logger.error(
+          `stage=outbox ${existing.status} not retried ` +
+            `part=${partIndex} conversation=${base.conversationId} ` +
+            `batch=${base.batchId}`,
+        );
+        stopped =
+          existing.status === "uncertain" ? "timeout" : "send-failed";
+        break;
+      }
+
+      const gate = await isCurrent();
+
+      if (!gate?.current) {
+        stopped = "superseded";
+
+        if (sentTexts.length === 0) {
+          deps.logger.log(
+            `Coordinator: dropping stale reply ` +
+              `(${gate?.reason ?? "unknown"})`,
+          );
+        } else {
+          deps.logger.log(
+            "Reply parts: newer messages arrived, stopping",
+            { reason: gate?.reason ?? "unknown" },
+          );
+        }
+
+        break;
+      }
+
+      if (index > 0) {
+        const remaining = deadline - deps.now();
+
+        if (remaining < MIN_STAGE_BUDGET_MS + PART_GAP_MAX_MS) {
+          deps.logger.log(
+            "Reply parts: budget low, skipping remaining parts",
+          );
+          stopped = "budget";
+          break;
+        }
+
+        await deps.sleep(
+          replyPartGapMs(parts[index - 1], deps.random),
+        );
+      }
+
+      const result = await sender.sendMessage(
+        trigger,
+        parts[index],
+        deadline,
+        partIndex,
+        tokenPromise,
+      );
+
+      if (result.ok) {
+        const assistantId = await store.storeAssistantMessage(
+          trigger.conversationId,
+          parts[index],
+        );
+
+        await store.markOutboxSent(base.batchId, partIndex, {
+          qqMessageId: result.qqMessageId ?? null,
+          assistantMessageId: assistantId,
+          attempts: result.attempts,
+        });
+
+        sentTexts.push(parts[index]);
+        deps.logger.log(
+          `stage=outbox sent part=${partIndex} ` +
+            `conversation=${base.conversationId} ` +
+            `batch=${base.batchId} revision=${base.revision} ` +
+            `msgSeq=${partIndex}`,
+        );
+        continue;
+      }
+
+      const status = result.uncertain ? "uncertain" : "failed";
+
+      await store.markOutboxFailure(base.batchId, partIndex, {
+        status,
+        error: result.reason ?? "send-failed",
+        attempts: result.attempts,
+      });
+
+      deps.logger.error(
+        `stage=outbox ${status} part=${partIndex} ` +
+          `conversation=${base.conversationId} ` +
+          `batch=${base.batchId} revision=${base.revision} ` +
+          `reason=${result.reason ?? "unknown"}`,
+      );
+
+      stopped = result.reason ?? "send-failed";
+      break;
     }
 
-    if (sendResult.reason === "superseded") {
+    if (stopped === "superseded" && sentTexts.length > 0) {
       deps.logger.log(
         "Coordinator: partial reply stopped by newer messages",
       );
     }
 
-    await store.storeAssistantMessage(
-      trigger.conversationId,
-      sendResult.sentTexts.join(" "),
-    );
+    if (sentTexts.length === 0) {
+      return {
+        status: stopped === "superseded" ? "stale" : "send-failed",
+        sentTexts,
+        stopped,
+      };
+    }
 
-    return {
-      status: "replied",
-      parts: sendResult.sentTexts.length,
-      stoppedByNewerMessages: sendResult.reason === "superseded",
-    };
+    return { status: "replied", sentTexts, stopped };
   }
 
   // Any successful group reply opens (or refreshes) the active window: the
@@ -158,6 +296,7 @@ export function createProcessor(env, overrides = {}) {
     deadline,
     tokenPromise,
     isCurrent,
+    batchMeta,
   ) {
     const hasImages = trigger.imageUrls.length > 0;
     let raw;
@@ -181,6 +320,7 @@ export function createProcessor(env, overrides = {}) {
         deadline,
         tokenPromise,
         isCurrent,
+        batchMeta,
       );
     }
 
@@ -190,6 +330,7 @@ export function createProcessor(env, overrides = {}) {
       deadline,
       tokenPromise,
       isCurrent,
+      batchMeta,
     );
   }
 
@@ -199,6 +340,7 @@ export function createProcessor(env, overrides = {}) {
     deadline,
     tokenPromise,
     isCurrent,
+    batchMeta,
     continuation = false,
   ) {
     const hasImages = trigger.imageUrls.length > 0;
@@ -231,6 +373,7 @@ export function createProcessor(env, overrides = {}) {
         deadline,
         tokenPromise,
         isCurrent,
+        batchMeta,
       );
       return finishGroupReply(trigger, outcome, route);
     }
@@ -241,6 +384,7 @@ export function createProcessor(env, overrides = {}) {
       deadline,
       tokenPromise,
       isCurrent,
+      batchMeta,
     );
 
     return finishGroupReply(trigger, outcome, route);
@@ -252,6 +396,7 @@ export function createProcessor(env, overrides = {}) {
     deadline,
     tokenPromise,
     isCurrent,
+    batchMeta,
   ) {
     const hasImages = trigger.imageUrls.length > 0;
     let raw;
@@ -298,6 +443,10 @@ export function createProcessor(env, overrides = {}) {
         `${parsed.messages.join("").length} chars)`,
     );
 
+    // The coordinator processes one conversation at a time (one alarm per
+    // instance), so this read-check-send sequence already behaves like an
+    // atomic claim at conversation level: no second batch can interject in
+    // between. The outbox adds the per-bubble facts on top.
     const nextAt = await store.getNextAutonomousAt(
       trigger.conversationId,
     );
@@ -313,6 +462,7 @@ export function createProcessor(env, overrides = {}) {
       deadline,
       tokenPromise,
       isCurrent,
+      batchMeta,
     );
 
     if (outcome.status === "replied") {
@@ -378,6 +528,12 @@ export function createProcessor(env, overrides = {}) {
       activeSpeaker: activeWindow.speaker,
     });
 
+    const batchMeta = {
+      batchId: batch.id,
+      revision: batch.revision,
+      route,
+    };
+
     deps.logger.log("Batch trigger:", {
       conversationId,
       batchId: batch.id,
@@ -398,6 +554,7 @@ export function createProcessor(env, overrides = {}) {
         deadline,
         tokenPromise,
         context.isCurrent,
+        batchMeta,
       );
     }
 
@@ -408,6 +565,7 @@ export function createProcessor(env, overrides = {}) {
         deadline,
         tokenPromise,
         context.isCurrent,
+        batchMeta,
       );
     }
 
@@ -418,6 +576,7 @@ export function createProcessor(env, overrides = {}) {
         deadline,
         tokenPromise,
         context.isCurrent,
+        batchMeta,
         true,
       );
     }
@@ -428,6 +587,7 @@ export function createProcessor(env, overrides = {}) {
       deadline,
       tokenPromise,
       context.isCurrent,
+      batchMeta,
     );
   }
 

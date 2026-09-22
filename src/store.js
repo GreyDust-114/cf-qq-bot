@@ -99,13 +99,123 @@ export function createStore(deps) {
   }
 
   async function storeAssistantMessage(conversationId, content) {
-    await db()
+    const result = await db()
       .prepare(
         `INSERT INTO messages
            (conversation_id, event_id, role, sender_name, content, created_at)
          VALUES (?, NULL, 'assistant', NULL, ?, ?)`,
       )
       .bind(conversationId, content, deps.now())
+      .run();
+
+    return Number(result.meta?.last_row_id ?? 0);
+  }
+
+  // Outbox: one row per generated bubble. Rows are created as pending before
+  // the network call, then updated in place so every state change survives a
+  // crash. Writes are intentionally not swallowed: a failed write must surface
+  // as a batch error so the coordinator can retry with the same msg_seq.
+  async function ensureOutboxParts(entries) {
+    const now = deps.now();
+
+    for (const entry of entries) {
+      await db()
+        .prepare(
+          `INSERT OR IGNORE INTO outbox
+             (conversation_id, batch_id, revision, route, part_index,
+              msg_seq, content, status, attempts, trigger_event_id,
+              created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', 0, ?, ?, ?)`,
+        )
+        .bind(
+          entry.conversationId,
+          entry.batchId,
+          entry.revision,
+          entry.route,
+          entry.partIndex,
+          entry.msgSeq,
+          entry.content,
+          entry.triggerEventId ?? null,
+          now,
+          now,
+        )
+        .run();
+    }
+  }
+
+  async function getOutboxPart(batchId, partIndex) {
+    const row = await db()
+      .prepare(
+        `SELECT id, content, status, assistant_message_id
+         FROM outbox
+         WHERE batch_id = ? AND part_index = ?`,
+      )
+      .bind(batchId, partIndex)
+      .first();
+
+    return row ?? null;
+  }
+
+  async function markOutboxSent(
+    batchId,
+    partIndex,
+    options = {},
+  ) {
+    await db()
+      .prepare(
+        `UPDATE outbox
+         SET status = 'sent', attempts = attempts + ?,
+             qq_message_id = ?, assistant_message_id = ?,
+             error = NULL, updated_at = ?
+         WHERE batch_id = ? AND part_index = ?`,
+      )
+      .bind(
+        options.attempts ?? 1,
+        options.qqMessageId ?? null,
+        options.assistantMessageId ?? null,
+        deps.now(),
+        batchId,
+        partIndex,
+      )
+      .run();
+  }
+
+  async function markOutboxAssistant(
+    batchId,
+    partIndex,
+    assistantMessageId,
+  ) {
+    await db()
+      .prepare(
+        `UPDATE outbox
+         SET assistant_message_id = ?, updated_at = ?
+         WHERE batch_id = ? AND part_index = ?`,
+      )
+      .bind(
+        assistantMessageId,
+        deps.now(),
+        batchId,
+        partIndex,
+      )
+      .run();
+  }
+
+  async function markOutboxFailure(batchId, partIndex, options) {
+    await db()
+      .prepare(
+        `UPDATE outbox
+         SET status = ?, attempts = attempts + ?, error = ?,
+             updated_at = ?
+         WHERE batch_id = ? AND part_index = ?`,
+      )
+      .bind(
+        options.status,
+        options.attempts ?? 1,
+        String(options.error ?? "").slice(0, 300),
+        deps.now(),
+        batchId,
+        partIndex,
+      )
       .run();
   }
 
@@ -201,5 +311,10 @@ export function createStore(deps) {
     markAutonomousReply,
     markActiveWindow,
     getActiveWindow,
+    ensureOutboxParts,
+    getOutboxPart,
+    markOutboxSent,
+    markOutboxAssistant,
+    markOutboxFailure,
   };
 }

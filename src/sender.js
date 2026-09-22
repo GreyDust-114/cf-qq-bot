@@ -1,16 +1,18 @@
+// QQ send primitives.
+//
+// This module only knows how to deliver one bubble: token, timeouts, one
+// retry for retryable network errors, and an honest uncertainty flag when the
+// outcome cannot be known. Bubble ordering, pacing, outbox bookkeeping and the
+// revision gate live in the processor, which owns the batch.
+
 import {
   MIN_STAGE_BUDGET_MS,
-  PART_GAP_MAX_MS,
   QQ_API_BASE_URL,
   SEND_RETRY_TIMEOUT_MS,
   SEND_TIMEOUT_MS,
 } from "./config.js";
 
-import {
-  isRetryableSendError,
-  replyPartGapMs,
-  stripTimePrefix,
-} from "./pure.js";
+import { isRetryableSendError } from "./pure.js";
 
 export function createReplySender(deps, tokenManager) {
   async function postQQMessage(
@@ -46,7 +48,17 @@ export function createReplySender(deps, tokenManager) {
     return { ok: response.ok, status: response.status, body };
   }
 
-  async function sendQQMessage(
+  function parseQQMessageId(body) {
+    try {
+      const data = JSON.parse(body);
+
+      return typeof data?.id === "string" ? data.id : null;
+    } catch {
+      return null;
+    }
+  }
+
+  async function sendMessage(
     incoming,
     content,
     deadline,
@@ -66,7 +78,7 @@ export function createReplySender(deps, tokenManager) {
       }
     } catch (error) {
       deps.logger.error("stage=token unavailable for send:", error);
-      return { ok: false, reason: "token" };
+      return { ok: false, reason: "token", uncertain: false, attempts: 0 };
     }
 
     for (let attempt = 1; attempt <= 2; attempt += 1) {
@@ -78,7 +90,12 @@ export function createReplySender(deps, tokenManager) {
         deps.logger.error(
           `stage=send skipped: budget exhausted (attempt ${attempt})`,
         );
-        return { ok: false, reason: "budget" };
+        return {
+          ok: false,
+          reason: "budget",
+          uncertain: false,
+          attempts: attempt - 1,
+        };
       }
 
       try {
@@ -95,7 +112,11 @@ export function createReplySender(deps, tokenManager) {
             `stage=send ok in ${deps.now() - startedAt}ms ` +
               `(msg_seq ${msgSeq}, attempt ${attempt})`,
           );
-          return { ok: true };
+          return {
+            ok: true,
+            attempts: attempt,
+            qqMessageId: parseQQMessageId(result.body),
+          };
         }
 
         deps.logger.error(
@@ -104,7 +125,13 @@ export function createReplySender(deps, tokenManager) {
             result.body.slice(0, 300),
         );
 
-        return { ok: false, reason: "http", status: result.status };
+        return {
+          ok: false,
+          reason: "http",
+          status: result.status,
+          uncertain: false,
+          attempts: attempt,
+        };
       } catch (error) {
         deps.logger.error(
           `stage=send attempt ${attempt} failed after ` +
@@ -113,7 +140,12 @@ export function createReplySender(deps, tokenManager) {
         );
 
         if (!isRetryableSendError(error)) {
-          return { ok: false, reason: "network" };
+          return {
+            ok: false,
+            reason: "network",
+            uncertain: false,
+            attempts: attempt,
+          };
         }
       }
     }
@@ -123,80 +155,8 @@ export function createReplySender(deps, tokenManager) {
         `(${deps.now() - startedAt}ms)`,
     );
 
-    return { ok: false, reason: "timeout" };
+    return { ok: false, reason: "timeout", uncertain: true, attempts: 2 };
   }
 
-  async function sendReplyParts(
-    incoming,
-    messages,
-    deadline,
-    tokenPromise = null,
-    shouldContinue = null,
-  ) {
-    const parts = (Array.isArray(messages) ? messages : [])
-      .map((part) => stripTimePrefix(String(part ?? "").trim()))
-      .filter(Boolean);
-
-    if (parts.length === 0) {
-      return { sentTexts: [], reason: "empty" };
-    }
-
-    const sentTexts = [];
-    let stopped = null;
-
-    for (let index = 0; index < parts.length; index += 1) {
-      if (shouldContinue) {
-        const gate = await shouldContinue();
-
-        if (!gate?.current) {
-          stopped = "superseded";
-          deps.logger.log(
-            "Reply parts: newer messages arrived, stopping",
-            { reason: gate?.reason ?? "unknown" },
-          );
-          break;
-        }
-      }
-
-      if (index > 0) {
-        const remaining = deadline - deps.now();
-
-        if (remaining < MIN_STAGE_BUDGET_MS + PART_GAP_MAX_MS) {
-          deps.logger.log(
-            "Reply parts: budget low, skipping remaining parts",
-          );
-          break;
-        }
-
-        await deps.sleep(
-          replyPartGapMs(parts[index - 1], deps.random),
-        );
-      }
-
-      const result = await sendQQMessage(
-        incoming,
-        parts[index],
-        deadline,
-        index + 1,
-        tokenPromise,
-      );
-
-      if (!result.ok) {
-        deps.logger.error(
-          `Reply part ${index + 1} failed:`,
-          result.reason,
-        );
-        break;
-      }
-
-      sentTexts.push(parts[index]);
-    }
-
-    return {
-      sentTexts,
-      reason: stopped ?? (sentTexts.length > 0 ? null : "send-failed"),
-    };
-  }
-
-  return { sendReplyParts };
+  return { sendMessage };
 }

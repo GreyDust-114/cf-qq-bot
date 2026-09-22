@@ -149,7 +149,7 @@ test("a structured reply sends its bubbles in order with length-aware gaps", asy
 
   assert.deepEqual(
     assistant.map((row) => row.content),
-    ["第一段 第二段 第三段"],
+    ["第一段", "第二段", "第三段"],
   );
 });
 

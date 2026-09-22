@@ -70,3 +70,17 @@ export async function listMessages(env, conversationId) {
 
   return results;
 }
+
+export async function listOutbox(env, conversationId) {
+  const { results } = await env.DB.prepare(
+    `SELECT batch_id, revision, part_index, msg_seq, status, attempts,
+            trigger_event_id, qq_message_id, assistant_message_id, error
+     FROM outbox
+     WHERE conversation_id = ?
+     ORDER BY part_index`,
+  )
+    .bind(conversationId)
+    .all();
+
+  return results;
+}

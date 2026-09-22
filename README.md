@@ -66,7 +66,7 @@ npm run check    # 只跑语法检查
 - 模型调用与 QQ 发送：脚本化 `fetch`，可以按调用次数返回成功、HTTP 错误或网络异常
 - 会话协调器：`test/support/hub.js` 把 alarm 变成手动时钟上的待办，按 conversationId 模拟「每个会话一个 Durable Object」；测试用 `hub.runAllAlarms()` 驱动防抖、重试与看门狗
 
-当前基线覆盖：webhook 验签与 op:13 回调、事件去重、同会话消息按到达顺序合并为一个批次、生成期间新消息的 revision 拦截、跨会话并行、alarm 失败重试与失效实例接管、上下文合并、结构化消息数组与超限合并、截断结构拒绝并兜底、长度自适应发送间隔、中途停发剩余气泡、发送失败不落库、网络失败重试、图片请求失败回退纯文本、私聊错误兜底、群聊 `NO_REPLY`、活跃期续句必回、其他成员仍由模型判断、窗口过期回落、冷却不吞续聊、时间前缀出站清理与历史格式区分、消息解析。
+当前基线覆盖：webhook 验签与 op:13 回调、事件去重、同会话消息按到达顺序合并为一个批次、生成期间新消息的 revision 拦截、跨会话并行、alarm 失败重试与失效实例接管、上下文合并、结构化消息数组与超限合并、截断结构拒绝并兜底、长度自适应发送间隔、中途停发剩余气泡、逐气泡 outbox 与因果关联、部分失败只记成功内容、不确定不自动重发、同批次重跑不重发、发送失败不落库、网络失败重试、图片请求失败回退纯文本、私聊错误兜底、群聊 `NO_REPLY`、活跃期续句必回、其他成员仍由模型判断、窗口过期回落、冷却不吞续聊、时间前缀出站清理与历史格式区分、消息解析。
 
 本地起 Worker：
 
@@ -177,6 +177,7 @@ npx wrangler deploy --dry-run --outdir dist
 | alarm 恢复 | 批次先写入 Durable Object storage 再处理；实例崩溃后下一个 alarm 接管，失败自动重试并记录错误 |
 | 活跃聊天 | 群聊里机器人回复后进入 90 秒活跃期；原发言者的未 @ 续句直接进入回复路径，其他成员仍由模型判断 |
 | 分条发送 | 模型返回 JSON 消息数组（1～3 条完整气泡），超限合并进最后一条；`msg_seq` 递增，条间隔按上一条长度自适应；非法/截断结构走安全兜底，不发半截内容 |
+| 发送 outbox | 每个气泡先写 `pending` 记录再发送，成功后立即标记 `sent` 并写入独立 assistant 记录；失败/超时记为 `failed`/`uncertain`，批次重跑不会重发已发送或结果不确定的气泡 |
 | 自主发言冷却 | 群聊中未被 @ 时，新话题的主动发言之间随机冷却；活跃期内原发言者的续句不受冷却影响 |
 | 思考模式 | 全部场景 `thinking: enabled` + `reasoning_effort: low` |
 | 决策协议 | 模型输出 `{"silent":true}` 表示不回复、`{"messages":[...]}` 表示回复；旧 `NO_REPLY` 与纯文本仍兼容兜底 |
@@ -230,6 +231,10 @@ Reply parse warning: merged-overflow      超过 3 条，已合并进最后一�
 Reply parse warning: plain-text-fallback  模型返回纯文本，按单条气泡兜底
 stage=reply invalid                       结构化输出无法解析，使用安全兜底
 Reply parts: newer messages arrived, stopping  新消息到达，停止剩余气泡
+stage=outbox sent part=N                  气泡发送成功并已记录（含 conversation/batch/revision/msgSeq）
+stage=outbox failed part=N                确定性失败，停止后续气泡
+stage=outbox uncertain part=N             结果不确定，不自动重发
+stage=outbox failed/uncertain not retried 批次重跑时跳过已失败或不确定的气泡
 Context loaded: N messages 上下文加载完成
 Decision: reply / no reply 自主发言判断结果
 Autonomous reply skipped   命中冷却
@@ -256,7 +261,7 @@ LLM time budget exhausted  模型时间不够（需要调小防抖或关闭思�
 - 图片只在当前消息内识别，历史里只保留 `【图片】` 占位
 - QQ 接口偶发响应慢（实测 2~8 秒），已做超时与重试保护
 - 生成与发送在 Durable Object alarm 中执行，不再受 `waitUntil` 30 秒限制；单次处理仍沿用 28 秒内部预算
-- 部分发送失败或发送结果不确定的恢复与 outbox 尚未实现（见 `BOT-006`）
+- `uncertain` 气泡（网络超时且无法确认是否送达）不会自动重发；D1 `outbox` 保留了同一 `msg_seq`，人工确认后可以安全重试
 
 ## 相关文档
 
