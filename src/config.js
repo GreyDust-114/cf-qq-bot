@@ -10,7 +10,10 @@ export const CONTEXT_MAX_CHARS = 60000;
 export const STORED_CONTENT_MAX_CHARS = 2000;
 export const MAX_REPLY_CHARS = 1800;
 
-export const MAX_REPLY_PARTS = 3;
+export const MAX_REPLY_PARTS = 4;
+// Target maximum characters per bubble. Longer model output is split at
+// punctuation so replies read like chat instead of paragraphs.
+export const BUBBLE_TARGET_MAX_CHARS = 15;
 export const PART_GAP_MIN_MS = 300;
 export const PART_GAP_MAX_MS = 1500;
 export const PART_GAP_PER_CHAR_MS = 30;

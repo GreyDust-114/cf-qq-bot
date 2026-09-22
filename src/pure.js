@@ -7,6 +7,7 @@ import {
   MAX_IMAGE_URL_LENGTH,
   MAX_REPLY_CHARS,
   MAX_REPLY_PARTS,
+  BUBBLE_TARGET_MAX_CHARS,
   PART_GAP_MAX_MS,
   PART_GAP_MIN_MS,
   PART_GAP_PER_CHAR_MS,
@@ -408,39 +409,113 @@ function stripCodeFence(value) {
   return fenced ? fenced[1].trim() : value;
 }
 
+// A bubble should read like one short chat line. When the model writes a long
+// sentence, split it at punctuation and pack the clauses into short bubbles.
+// Clauses of separate model bubbles are never merged unless the total exceeds
+// MAX_REPLY_PARTS, in which case the shortest neighbours are merged first.
+const CLAUSE_BOUNDARY = /(?<=[。！？!?…；;，,、])/;
+
+function splitIntoClauses(text) {
+  return String(text ?? "")
+    .split(CLAUSE_BOUNDARY)
+    .map((clause) => clause.trim())
+    .filter(Boolean);
+}
+
+function packClauses(clauses, maxChars) {
+  const bubbles = [];
+  let current = "";
+
+  for (const clause of clauses) {
+    const candidate = current + clause;
+
+    if (current && candidate.length > maxChars) {
+      bubbles.push(current);
+      current = clause;
+      continue;
+    }
+
+    current = candidate;
+  }
+
+  if (current) {
+    bubbles.push(current);
+  }
+
+  return bubbles;
+}
+
+function splitLongBubble(bubble, maxChars) {
+  if (bubble.length <= maxChars) {
+    return [bubble];
+  }
+
+  const clauses = splitIntoClauses(bubble);
+
+  if (clauses.length <= 1) {
+    return [bubble];
+  }
+
+  return packClauses(clauses, maxChars);
+}
+
+function mergeToCap(bubbles, maxParts) {
+  const result = bubbles.slice();
+
+  while (result.length > maxParts) {
+    let bestIndex = 0;
+    let bestLength = Infinity;
+
+    for (let index = 0; index < result.length - 1; index += 1) {
+      const combined = result[index].length + result[index + 1].length;
+
+      if (combined < bestLength) {
+        bestLength = combined;
+        bestIndex = index;
+      }
+    }
+
+    result.splice(
+      bestIndex,
+      2,
+      result[bestIndex] + result[bestIndex + 1],
+    );
+  }
+
+  return result;
+}
+
 function finalizeReplyMessages(items) {
   const dropped = items.some((item) => typeof item !== "string");
-  // A bubble must be one complete sentence. Models often return one string
-  // with paragraph or line breaks inside it, so every line break starts a new
-  // bubble before the 1-3 bubble policy is applied.
-  const messages = items
+  // Every line break starts a new model bubble before the 1-4 bubble policy
+  // is applied.
+  const modelBubbles = items
     .flatMap((item) =>
       typeof item === "string" ? item.split(/\r?\n+/) : [item],
     )
     .filter((item) => typeof item === "string")
     .map((item) => mdToPlain(item))
-    .filter(Boolean)
-    .map((item) => truncateReply(item));
+    .filter(Boolean);
 
-  if (messages.length === 0) {
+  if (modelBubbles.length === 0) {
     return { kind: "empty", messages: [], warning: null };
   }
 
-  if (messages.length > MAX_REPLY_PARTS) {
-    const kept = messages.slice(0, MAX_REPLY_PARTS);
-    const overflow = messages.slice(MAX_REPLY_PARTS);
-
-    kept[kept.length - 1] = truncateReply(
-      `${kept[kept.length - 1]} ${overflow.join(" ")}`,
-    );
-
-    return { kind: "messages", messages: kept, warning: "merged-overflow" };
-  }
+  const split = modelBubbles.flatMap((bubble) =>
+    splitLongBubble(bubble, BUBBLE_TARGET_MAX_CHARS),
+  );
+  const merged = mergeToCap(split, MAX_REPLY_PARTS);
+  const messages = merged.map((bubble) => truncateReply(bubble));
 
   return {
     kind: "messages",
     messages,
-    warning: dropped ? "non-string-bubble" : null,
+    warning:
+      merged.length < split.length
+        ? "merged-overflow"
+        : dropped
+          ? "non-string-bubble"
+          : null,
   };
 }
 

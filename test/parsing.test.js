@@ -137,13 +137,49 @@ test("parseReplyOutput unwraps fenced JSON and cleans each bubble", () => {
   assert.deepEqual(parsed.messages, ["加粗", "代码"]);
 });
 
+test("long bubbles are split at punctuation into short bubbles", () => {
+  const parsed = parseReplyOutput(
+    JSON.stringify({
+      messages: [
+        "那个包看着就痒，别挠啊，越挠越大，明天肿起来更难受，随便抹点东西吧",
+      ],
+    }),
+  );
+
+  assert.equal(parsed.kind, "messages");
+  assert.deepEqual(parsed.messages, [
+    "那个包看着就痒，别挠啊，",
+    "越挠越大，明天肿起来更难受，",
+    "随便抹点东西吧",
+  ]);
+});
+
+test("model bubbles stay separate when they are already short", () => {
+  const parsed = parseReplyOutput(
+    '{"messages":["好的","没问题"]}',
+  );
+
+  assert.deepEqual(parsed.messages, ["好的", "没问题"]);
+});
+
+test("overflow beyond four bubbles is merged without dropping content", () => {
+  const parsed = parseReplyOutput(
+    '{"messages":["一甲","二甲","三甲","四甲","五甲","六甲"]}',
+  );
+
+  assert.equal(parsed.kind, "messages");
+  assert.equal(parsed.messages.length, 4);
+  assert.equal(parsed.messages.join(""), "一甲二甲三甲四甲五甲六甲");
+  assert.equal(parsed.warning, "merged-overflow");
+});
+
 test("parseReplyOutput merges overflow bubbles instead of dropping them", () => {
   const parsed = parseReplyOutput(
     '{"messages":["一","二","三","四","五"]}',
   );
 
   assert.equal(parsed.kind, "messages");
-  assert.deepEqual(parsed.messages, ["一", "二", "三 四 五"]);
+  assert.deepEqual(parsed.messages, ["一二", "三", "四", "五"]);
   assert.equal(parsed.warning, "merged-overflow");
 });
 
@@ -207,12 +243,12 @@ test("single line breaks also become separate bubbles", () => {
   assert.deepEqual(parsed.messages, ["第一句", "第二句"]);
 });
 
-test("split bubbles still obey the three-bubble overflow merge", () => {
+test("split bubbles still obey the four-bubble overflow merge", () => {
   const parsed = parseReplyOutput(
-    '{"messages":["一\\n二","三","四"]}',
+    '{"messages":["一\\n二","三","四","五"]}',
   );
 
-  assert.deepEqual(parsed.messages, ["一", "二", "三 四"]);
+  assert.deepEqual(parsed.messages, ["一二", "三", "四", "五"]);
   assert.equal(parsed.warning, "merged-overflow");
 });
 

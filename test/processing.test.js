@@ -7,6 +7,7 @@ import {
   createTestContext,
   jsonResponse,
   listMessages,
+  listOutbox,
   parseSendBody,
 } from "./support/index.js";
 
@@ -192,7 +193,50 @@ test("reply requests do not force JSON output mode", async () => {
   assert.equal(body.response_format, undefined);
 });
 
-test("overflow bubbles are merged into the last bubble, never silently dropped", async () => {
+test("a long bubble is sent as several short bubbles", async () => {
+  const ctx = createTestContext({
+    sleep: async () => {},
+    fetchHandlers: {
+      llmReply: JSON.stringify({
+        messages: [
+          "那个包看着就痒，别挠啊，越挠越大，明天肿起来更难受，随便抹点东西吧",
+        ],
+      }),
+    },
+  });
+
+  await ctx.deliver(
+    buildC2cPayload({ id: "split-long", content: "包痒" }),
+  );
+
+  const sends = ctx.fetch.sendCalls().map(parseSendBody);
+
+  assert.deepEqual(
+    sends.map((send) => send.content),
+    [
+      "那个包看着就痒，别挠啊，",
+      "越挠越大，明天肿起来更难受，",
+      "随便抹点东西吧",
+    ],
+  );
+  assert.deepEqual(
+    sends.map((send) => send.msg_seq),
+    [1, 2, 3],
+  );
+
+  const outbox = await listOutbox(ctx.env, "c2c:user-openid-1");
+
+  assert.deepEqual(
+    outbox.map((row) => [row.part_index, row.status]),
+    [
+      [1, "sent"],
+      [2, "sent"],
+      [3, "sent"],
+    ],
+  );
+});
+
+test("overflow bubbles are merged without dropping content", async () => {
   const ctx = createTestContext({
     sleep: async () => {},
     fetchHandlers: {
@@ -203,14 +247,14 @@ test("overflow bubbles are merged into the last bubble, never silently dropped",
   });
 
   await ctx.deliver(
-    buildC2cPayload({ id: "split-2", content: "超过三条" }),
+    buildC2cPayload({ id: "split-2", content: "超过四条" }),
   );
 
   const sends = ctx.fetch.sendCalls().map(parseSendBody);
 
   assert.deepEqual(
     sends.map((send) => send.content),
-    ["一", "二", "三 四 五"],
+    ["一二", "三", "四", "五"],
   );
   assert.ok(ctx.logger.has("merged-overflow"));
 });
