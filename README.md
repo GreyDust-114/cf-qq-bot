@@ -223,5 +223,5 @@ LLM time budget exhausted  模型时间不够（需要调小防抖或关闭思�
 ## 相关文档
 
 - `TODO.md` — 待办与后续计划
-- `runtime/` — 任务 State 与 Trajectory
+- `runtime/` — 本地 Agent 过程记录（State 与 Trajectory，不进入版本库）
 - 人设素材来源：PRTS 明日方舟中文 Wiki（能天使 / 新约能天使 / 拉特兰 / 企鹅物流）
