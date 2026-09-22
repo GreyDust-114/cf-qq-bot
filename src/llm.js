@@ -18,9 +18,11 @@ export function createLlmClient(deps) {
       messages,
       thinking: { type: "enabled" },
       reasoning_effort: "low",
-      // Every generation path expects the structured reply/silent JSON
-      // protocol, so enforce JSON output instead of relying on the prompt.
-      response_format: { type: "json_object" },
+      // NOTE: response_format: json_object was tried and reverted. With
+      // thinking enabled the API returned JSON shapes that parsed to empty
+      // messages (mention replies fell back to the safe reply, autonomous
+      // batches turned silent). The structured protocol is requested by the
+      // prompts only; the parser accepts plain text as a fallback.
       max_tokens: options.maxTokens ?? 2000,
       stream: false,
     };

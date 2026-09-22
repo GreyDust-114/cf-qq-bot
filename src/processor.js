@@ -286,6 +286,10 @@ export function createProcessor(env, overrides = {}) {
 
     deps.logger.error(
       `stage=reply ${parsed.kind} (${route}), using safe fallback`,
+      {
+        rawLength: String(raw ?? "").length,
+        rawPreview: JSON.stringify(String(raw ?? "").slice(0, 120)),
+      },
     );
     return [fallback];
   }

@@ -178,7 +178,7 @@ test("a paragraph reply is split into separate QQ bubbles", async () => {
   assert.ok(ctx.logger.has("plain-text-fallback"));
 });
 
-test("reply requests ask DeepSeek for JSON output", async () => {
+test("reply requests do not force JSON output mode", async () => {
   const ctx = createTestContext({
     fetchHandlers: { llmReply: "好的" },
   });
@@ -189,7 +189,7 @@ test("reply requests ask DeepSeek for JSON output", async () => {
 
   const body = JSON.parse(ctx.fetch.llmCalls()[0].body);
 
-  assert.deepEqual(body.response_format, { type: "json_object" });
+  assert.equal(body.response_format, undefined);
 });
 
 test("overflow bubbles are merged into the last bubble, never silently dropped", async () => {
