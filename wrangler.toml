@@ -1,0 +1,21 @@
+name = "qq-ai-bot"
+main = "src/index.js"
+compatibility_date = "2026-08-04"
+compatibility_flags = ["nodejs_compat"]
+
+[observability]
+enabled = true
+
+[[d1_databases]]
+binding = "DB"
+database_name = "qq-ai-bot-db"
+# 运行 `npx wrangler d1 list` 查看真实 ID，或 `npx wrangler d1 create qq-ai-bot-db` 创建。
+# 本地 `wrangler dev` 不校验该值，远程部署前必须替换。
+database_id = "REPLACE_WITH_D1_DATABASE_ID"
+migrations_dir = "db/migrations"
+
+[vars]
+QQ_APP_ID = ""
+LLM_BASE_URL = "https://api.deepseek.com"
+LLM_MODEL = "deepseek-flash"
+ALLOWED_GROUP_OPENID = ""
