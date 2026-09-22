@@ -214,8 +214,8 @@ test("a long bubble is sent as several short bubbles", async () => {
   assert.deepEqual(
     sends.map((send) => send.content),
     [
-      "那个包看着就痒，别挠啊，",
-      "越挠越大，明天肿起来更难受，",
+      "那个包看着就痒，别挠啊",
+      "越挠越大，明天肿起来更难受",
       "随便抹点东西吧",
     ],
   );

@@ -137,7 +137,7 @@ test("parseReplyOutput unwraps fenced JSON and cleans each bubble", () => {
   assert.deepEqual(parsed.messages, ["加粗", "代码"]);
 });
 
-test("long bubbles are split at punctuation into short bubbles", () => {
+test("long bubbles are split at punctuation into short bubbles without dangling separators", () => {
   const parsed = parseReplyOutput(
     JSON.stringify({
       messages: [
@@ -148,8 +148,8 @@ test("long bubbles are split at punctuation into short bubbles", () => {
 
   assert.equal(parsed.kind, "messages");
   assert.deepEqual(parsed.messages, [
-    "那个包看着就痒，别挠啊，",
-    "越挠越大，明天肿起来更难受，",
+    "那个包看着就痒，别挠啊",
+    "越挠越大，明天肿起来更难受",
     "随便抹点东西吧",
   ]);
 });
@@ -160,6 +160,26 @@ test("model bubbles stay separate when they are already short", () => {
   );
 
   assert.deepEqual(parsed.messages, ["好的", "没问题"]);
+});
+
+test("non-final separator punctuation is removed but internal and final punctuation survive", () => {
+  const parsed = parseReplyOutput(
+    '{"messages":["那就别再开新的了，","改完立刻关电脑，","晚安。"]}',
+  );
+
+  assert.deepEqual(parsed.messages, [
+    "那就别再开新的了",
+    "改完立刻关电脑",
+    "晚安。",
+  ]);
+});
+
+test("a single bubble keeps its own final punctuation", () => {
+  const parsed = parseReplyOutput(
+    '{"messages":["那就别再开新的了，"]}',
+  );
+
+  assert.deepEqual(parsed.messages, ["那就别再开新的了，"]);
 });
 
 test("overflow beyond four bubbles is merged without dropping content", () => {

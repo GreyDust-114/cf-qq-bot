@@ -506,10 +506,15 @@ function finalizeReplyMessages(items) {
   );
   const merged = mergeToCap(split, MAX_REPLY_PARTS);
   const messages = merged.map((bubble) => truncateReply(bubble));
+  const normalized = messages.map((message, index) =>
+    index < messages.length - 1
+      ? message.replace(/[，,、；;：:]\s*$/, "").trim()
+      : message,
+  );
 
   return {
     kind: "messages",
-    messages,
+    messages: normalized,
     warning:
       merged.length < split.length
         ? "merged-overflow"
