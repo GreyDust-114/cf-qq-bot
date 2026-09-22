@@ -10,3 +10,4 @@ AGENTS.md
 TODO.md
 *.log
 dist/
+.mcp.json
