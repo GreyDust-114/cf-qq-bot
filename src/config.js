@@ -26,6 +26,13 @@ export const INVOCATION_BUDGET_MS = 28 * 1000;
 export const MIN_STAGE_BUDGET_MS = 2000;
 export const SEND_BUDGET_RESERVE_MS = 8000;
 
+// Conversation coordinator (Durable Object) tunables.
+// A processing batch older than PROCESSING_STALE_MS is considered abandoned
+// (instance evicted / crashed) and is taken over by the next alarm.
+export const PROCESSING_STALE_MS = 45 * 1000;
+export const PROCESSING_RETRY_DELAY_MS = 5 * 1000;
+export const MAX_PROCESSING_ATTEMPTS = 3;
+
 export const LLM_TIMEOUT_MS = 12 * 1000;
 export const FALLBACK_RETRY_TIMEOUT_MS = 8 * 1000;
 export const TOKEN_TIMEOUT_MS = 5 * 1000;

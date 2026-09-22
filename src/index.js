@@ -1,5 +1,7 @@
 import { createRuntime } from "./runtime.js";
 
+export { ConversationHub } from "./conversation-hub.js";
+
 // The runtime is cached per isolate so the in-memory QQ access token cache
 // survives between requests. Tests construct their own runtime directly.
 let cachedRuntime = null;

@@ -14,6 +14,15 @@ database_name = "qq-ai-bot-db"
 database_id = "REPLACE_WITH_D1_DATABASE_ID"
 migrations_dir = "db/migrations"
 
+# 每个 conversationId 一个 ConversationHub 实例，负责会话级串行与 alarm。
+[[durable_objects.bindings]]
+name = "CONVERSATION_HUB"
+class_name = "ConversationHub"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["ConversationHub"]
+
 [vars]
 QQ_APP_ID = ""
 LLM_BASE_URL = "https://api.deepseek.com"

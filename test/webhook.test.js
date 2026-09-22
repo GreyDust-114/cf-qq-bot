@@ -177,7 +177,7 @@ test("webhook rejects a bad signature without scheduling work", async () => {
 });
 
 test("signed webhook event acks immediately and processes the message", async () => {
-  const { runtime, env, fetch } = createTestContext({
+  const { runtime, env, fetch, hub } = createTestContext({
     sleep: async () => {},
     fetchHandlers: { llmReply: "在的" },
   });
@@ -197,6 +197,14 @@ test("signed webhook event acks immediately and processes the message", async ()
 
   await ctx.promises[0];
 
+  // Enqueue recorded the user message as a D1 fact already; the reply is
+  // produced by the coordinator alarm.
+  let messages = await listMessages(env, "c2c:user-openid-1");
+
+  assert.equal(messages.length, 1);
+
+  await hub.runAllAlarms();
+
   assert.equal(fetch.sendCalls().length, 1);
 
   const sendBody = JSON.parse(fetch.sendCalls()[0].body);
@@ -204,13 +212,13 @@ test("signed webhook event acks immediately and processes the message", async ()
   assert.equal(sendBody.content, "在的");
   assert.equal(sendBody.msg_seq, 1);
 
-  const messages = await listMessages(env, "c2c:user-openid-1");
+  messages = await listMessages(env, "c2c:user-openid-1");
 
   assert.equal(messages.length, 2);
 });
 
 test("duplicate event ids are ignored on redelivery", async () => {
-  const { runtime, env, fetch, logger } = createTestContext({
+  const { runtime, env, fetch, logger, hub } = createTestContext({
     sleep: async () => {},
     fetchHandlers: { llmReply: "只回一次" },
   });
@@ -227,6 +235,7 @@ test("duplicate event ids are ignored on redelivery", async () => {
 
     assert.equal(response.status, 200);
     await ctx.promises[0];
+    await hub.runAllAlarms();
   }
 
   assert.equal(fetch.llmCalls().length, 1);
@@ -235,7 +244,7 @@ test("duplicate event ids are ignored on redelivery", async () => {
 });
 
 test("webhook keeps responding when processing fails", async () => {
-  const { runtime, env, logger } = createTestContext({
+  const { runtime, env, logger, hub } = createTestContext({
     sleep: async () => {},
     fetchHandlers: {
       onRequest: (call) =>
@@ -256,6 +265,7 @@ test("webhook keeps responding when processing fails", async () => {
 
   assert.equal(response.status, 200);
   await ctx.promises[0];
+  await hub.runAllAlarms();
 
   assert.ok(logger.has("stage=llm private failed"));
 });

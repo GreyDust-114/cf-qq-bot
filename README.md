@@ -11,6 +11,12 @@ QQ 官方 Bot
    ▼
 Cloudflare Worker（Wrangler 项目）
    ├─ Ed25519 验签 / op:13 回调验证
+   ├─ 解析消息并按 conversationId 路由
+   │
+   ▼
+Durable Object「ConversationHub」（每个会话一个）
+   ├─ 防抖 alarm、待处理消息批次、revision/租约检查
+   ├─ 批次生成与分条发送（同一会话串行）
    ├─ D1：聊天记录、token 缓存、冷却状态
    ├─ DeepSeek API（OpenAI 兼容）
    └─ QQ OpenAPI：发送回复
@@ -20,8 +26,12 @@ Cloudflare Worker（Wrangler 项目）
 
 | 文件 | 作用 |
 |---|---|
-| `src/index.js` | Worker 入口：只做环境接线与请求转发 |
-| `src/runtime.js` | 编排：webhook 路由、防抖、会话处理、自主发言 |
+| `src/index.js` | Worker 入口：环境接线、请求转发、导出 ConversationHub 类 |
+| `src/runtime.js` | Webhook 边缘：验签、解析、按 conversationId 路由到协调器 |
+| `src/coordinator.js` | 会话协调器：alarm 防抖、批次、revision/租约、重试与看门狗 |
+| `src/coordinator-state.js` | 协调器纯状态机：pending/batch/revision 迁移与恢复 |
+| `src/conversation-hub.js` | Durable Object 封装：每个会话一个实例，持有协调器 storage 与 alarm |
+| `src/processor.js` | 批次处理器：生成、revision 检查、发送、assistant 落库 |
 | `src/pure.js` | 纯函数：消息解析、提示词组装、Markdown 清理、分条 |
 | `src/store.js` | D1 读写：会话、消息、冷却状态 |
 | `src/token.js` | QQ access_token 获取与 D1 缓存 |
@@ -32,7 +42,7 @@ Cloudflare Worker（Wrangler 项目）
 | `src/dependencies.js` | 依赖注入接缝：时钟、sleep、随机、fetch、logger |
 | `src/prompts.js` | 全部提示词：人设「新約エクシア」+ 群聊决策 / @ 回复 / 私聊 |
 | `db/migrations/` | D1 schema 迁移文件 |
-| `test/` | 离线回归测试（Node 内置 test runner）；`test/support/` 放测试环境：内存 D1 adapter、假 fetch、手动时钟、payload 构造器 |
+| `test/` | 离线回归测试（Node 内置 test runner）；`test/support/` 放测试环境：内存 D1 adapter、假 fetch、手动时钟、payload 构造器、按会话隔离的内存协调器 hub |
 | `scripts/` | 开发工具：语法检查、提交信息校验 |
 | `.githooks/` `.gitmessage` | commit-msg 钩子与提交模板 |
 | `wrangler.toml` | Wrangler 项目配置：入口、D1 绑定、变量 |
@@ -51,11 +61,12 @@ npm run check    # 只跑语法检查
 
 测试不访问网络、不依赖 Cloudflare 账号，通过依赖注入覆盖以下接缝：
 
-- 时钟与 sleep：`deps.now` / `deps.sleep`，由手动时钟控制防抖、分条间隔和冷却
+- 时钟与 sleep：`deps.now` / `deps.sleep`，由手动时钟控制分条间隔和冷却
 - D1：`node:sqlite` 实现的 D1 兼容 adapter，直接套用 `db/migrations/0001_init.sql`
 - 模型调用与 QQ 发送：脚本化 `fetch`，可以按调用次数返回成功、HTTP 错误或网络异常
+- 会话协调器：`test/support/hub.js` 把 alarm 变成手动时钟上的待办，按 conversationId 模拟「每个会话一个 Durable Object」；测试用 `hub.runAllAlarms()` 驱动防抖、重试与看门狗
 
-当前基线覆盖：webhook 验签与 op:13 回调、事件去重、同一会话连续消息的防抖让位、上下文合并、分条发送、发送失败不落库、网络失败重试、图片请求失败回退纯文本、私聊错误兜底、群聊 `NO_REPLY` 与自主发言冷却、消息解析。
+当前基线覆盖：webhook 验签与 op:13 回调、事件去重、同会话消息按到达顺序合并为一个批次、生成期间新消息的 revision 拦截、跨会话并行、alarm 失败重试与失效实例接管、上下文合并、分条发送、发送失败不落库、网络失败重试、图片请求失败回退纯文本、私聊错误兜底、群聊 `NO_REPLY` 与自主发言冷却、消息解析。
 
 本地起 Worker：
 
@@ -111,6 +122,8 @@ npx wrangler d1 migrations apply qq-ai-bot-db --remote   # 远程
 
 未来的 schema 变更以新的迁移文件追加，不要修改已应用过的迁移。
 
+Durable Object 不需要手工建表：`wrangler.toml` 里的 `[[migrations]] tag = "v1"` 会在 `wrangler deploy` 时创建 `ConversationHub` 类；每个会话的协调状态存在对象自己的 storage 里，与 D1 解耦。
+
 ### 5. 部署与验证
 
 ```powershell
@@ -156,7 +169,10 @@ npx wrangler deploy --dry-run --outdir dist
 
 | 机制 | 说明 |
 |---|---|
-| 防抖 | 收到消息后先等待再处理；窗口内又来新消息则让位给最新一条，碎片消息自动合并 |
+| 防抖 | 每个会话一个协调器：新消息重置静默窗口（alarm），窗口结束把窗口内的消息合并成一个批次处理；没有多条 waitUntil 各自防抖 |
+| 会话串行 | 同一会话的生成、发送和状态写入在同一协调器内串行；不同会话在不同 Durable Object 上并行 |
+| revision 检查 | 生成期间有新消息时，旧结果在发送前被丢弃；分条发送中途也会检查，新消息到达就停止剩余气泡 |
+| alarm 恢复 | 批次先写入 Durable Object storage 再处理；实例崩溃后下一个 alarm 接管，失败自动重试并记录错误 |
 | 分条发送 | 模型用 `\|\|\|` 分隔多条，最多 3 条，`msg_seq` 递增，条间隔随机 |
 | 自主发言冷却 | 群聊中未被 @ 时，两次主动发言之间随机冷却 |
 | 思考模式 | 全部场景 `thinking: enabled` + `reasoning_effort: low` |
@@ -178,10 +194,13 @@ npx wrangler deploy --dry-run --outdir dist
 | `MAX_REPLY_CHARS` | 1800 | 单条回复最大长度 |
 | `MAX_REPLY_PARTS` | 3 | 分条发送上限 |
 | `PART_GAP_MIN_MS` / `MAX` | 400 / 1200 | 分条之间的间隔 |
-| `DEBOUNCE_MENTION_MIN_MS` / `MAX` | 3000 / 5000 | @ 消息防抖窗口 |
-| `DEBOUNCE_GROUP_MIN_MS` / `MAX` | 6000 / 9000 | 普通消息防抖窗口 |
+| `DEBOUNCE_MENTION_MIN_MS` / `MAX` | 3000 / 5000 | @ 消息静默窗口 |
+| `DEBOUNCE_GROUP_MIN_MS` / `MAX` | 6000 / 9000 | 普通消息静默窗口 |
+| `PROCESSING_STALE_MS` | 45000 | 批次超过这个时间未完成视为实例失效，下个 alarm 接管 |
+| `PROCESSING_RETRY_DELAY_MS` | 5000 | 批次处理失败后的重试间隔 |
+| `MAX_PROCESSING_ATTEMPTS` | 3 | 同一批次最大处理次数，超过后丢弃并保留失败记录 |
 | `AUTONOMOUS_COOLDOWN_MIN_MS` / `MAX` | 15000 / 45000 | 自主发言冷却区间 |
-| `INVOCATION_BUDGET_MS` | 28000 | 单次处理总预算（waitUntil 上限 30s） |
+| `INVOCATION_BUDGET_MS` | 28000 | 单次批次处理的内部预算（LLM、发送与分条的总上限） |
 | `SEND_BUDGET_RESERVE_MS` | 8000 | 留给发送的时间 |
 | `LLM_TIMEOUT_MS` | 12000 | 单次模型调用上限 |
 | `SEND_TIMEOUT_MS` | 8000 | 单条发送超时 |
@@ -193,8 +212,13 @@ npx wrangler deploy --dry-run --outdir dist
 
 ```text
 Incoming message:           收到事件（含 wasMentioned / images）
-Debounce: deferring        本条让位给更新的消息
-Debounce: waited Xms       防抖结束，开始处理
+stage=coordinator enqueue   消息进入会话协调器（revision / pending / alarmAt）
+stage=coordinator batch start 静默窗口结束，批次开始处理（batchId / revision / messages）
+stage=coordinator batch done  批次处理结束（status / 剩余 pending）
+stage=coordinator alarm deferred      alarm 在批次处理中提前触发，不重复生成
+stage=coordinator recovering stale batch  旧实例的批次被新 alarm 接管
+stage=coordinator batch retry scheduled   批次失败，已安排重试（attempt）
+stage=coordinator batch abandoned         超过重试上限，保留 failed_batch 记录
 Context loaded: N messages 上下文加载完成
 Decision: reply / no reply 自主发言判断结果
 Autonomous reply skipped   命中冷却
@@ -210,6 +234,7 @@ LLM time budget exhausted  模型时间不够（需要调小防抖或关闭思�
 
 - 频繁 `LLM time budget exhausted`：调小 `DEBOUNCE_GROUP_MIN_MS/MAX_MS`，或自主发言改回不思考
 - 频繁 `stage=send` 超时：QQ 接口偶发慢，属网络波动；连续出现可考虑 Cloudflare Queue
+- 频繁 `recovering stale batch`：说明单次生成超过 `PROCESSING_STALE_MS` 或实例频繁被驱逐，检查 LLM 耗时
 - 想清空聊天记忆：D1 控制台执行 `DELETE FROM messages; DELETE FROM conversations;`（`settings` 表不要动）
 
 ## 已知限制
@@ -218,7 +243,8 @@ LLM time budget exhausted  模型时间不够（需要调小防抖或关闭思�
 - 不支持贴纸、网络搜索
 - 图片只在当前消息内识别，历史里只保留 `【图片】` 占位
 - QQ 接口偶发响应慢（实测 2~8 秒），已做超时与重试保护
-- 单次处理总时长受 Cloudflare `waitUntil` 30 秒限制
+- 生成与发送在 Durable Object alarm 中执行，不再受 `waitUntil` 30 秒限制；单次处理仍沿用 28 秒内部预算
+- 部分发送失败或发送结果不确定的恢复与 outbox 尚未实现（见 `BOT-006`）
 
 ## 相关文档
 

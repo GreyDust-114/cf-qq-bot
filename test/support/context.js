@@ -1,10 +1,13 @@
-// 测试上下文组装：把生产 runtime 接到内存 D1、假 fetch、手动时钟和捕获 logger。
+// 测试上下文组装：把生产 runtime 接到内存 D1、假 fetch、手动时钟、
+// 捕获 logger，以及按会话隔离的内存协调器 hub。
 
+import { createProcessor } from "../../src/processor.js";
 import { createRuntime } from "../../src/runtime.js";
 
 import { createManualClock } from "./clock.js";
 import { createSqliteD1 } from "./d1.js";
 import { createFakeFetch } from "./fetch.js";
+import { createTestHub } from "./hub.js";
 
 export function createTestLogger() {
   const entries = [];
@@ -44,15 +47,49 @@ export function createTestContext(options = {}) {
   const env = options.env ?? createTestEnv();
   const logger = options.logger ?? createTestLogger();
   const clock = options.clock ?? createManualClock();
-  const fetchImpl = options.fetch ?? createFakeFetch(options.fetchHandlers);
+  const fetchImpl =
+    options.fetch ?? createFakeFetch(options.fetchHandlers);
 
-  const runtime = createRuntime(env, {
+  const overrides = {
     now: options.now ?? (() => clock.now()),
     sleep: options.sleep ?? clock.sleep,
     random: options.random ?? (() => 0.5),
     fetch: fetchImpl,
     logger,
+  };
+
+  const processor = createProcessor(env, overrides);
+
+  const hub = createTestHub({
+    clock,
+    logger,
+    random: overrides.random,
+    recordIncoming: processor.recordIncoming,
+    processBatch: processor.processBatch,
+    ...(options.hub ?? {}),
   });
 
-  return { runtime, env, clock, logger, fetch: fetchImpl };
+  const runtime = createRuntime(env, {
+    ...overrides,
+    coordinator: hub,
+  });
+
+  const deliver = async (payload) => {
+    const result = await runtime.processIncomingMessage(payload);
+
+    await hub.runAllAlarms();
+
+    return result;
+  };
+
+  return {
+    runtime,
+    env,
+    clock,
+    logger,
+    fetch: fetchImpl,
+    hub,
+    processor,
+    deliver,
+  };
 }

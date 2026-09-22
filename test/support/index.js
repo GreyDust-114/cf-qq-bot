@@ -10,6 +10,7 @@ export {
   parseSendBody,
 } from "./fetch.js";
 export { buildC2cPayload, buildGroupPayload } from "./payloads.js";
+export { COORDINATOR_STATE_KEY, createTestHub } from "./hub.js";
 export {
   createTestContext,
   createTestEnv,

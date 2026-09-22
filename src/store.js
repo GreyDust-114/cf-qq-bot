@@ -50,23 +50,6 @@ export function createStore(deps) {
     };
   }
 
-  async function hasNewerUserMessage(conversationId, rowId) {
-    const row = await db()
-      .prepare(
-        `SELECT id
-         FROM messages
-         WHERE conversation_id = ?
-           AND role = 'user'
-           AND id > ?
-         ORDER BY id DESC
-         LIMIT 1`,
-      )
-      .bind(conversationId, rowId)
-      .first();
-
-    return Boolean(row);
-  }
-
   async function loadConversationContext(conversationId) {
     const summaryRow = await db()
       .prepare(
@@ -172,7 +155,6 @@ export function createStore(deps) {
   return {
     ensureConversation,
     storeIncomingMessage,
-    hasNewerUserMessage,
     loadConversationContext,
     storeAssistantMessage,
     getNextAutonomousAt,

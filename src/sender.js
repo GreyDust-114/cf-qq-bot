@@ -132,6 +132,7 @@ export function createReplySender(deps, tokenManager) {
     replyText,
     deadline,
     tokenPromise = null,
+    shouldContinue = null,
   ) {
     const parts = splitReplyParts(replyText);
 
@@ -140,8 +141,22 @@ export function createReplySender(deps, tokenManager) {
     }
 
     const sentTexts = [];
+    let stopped = null;
 
     for (let index = 0; index < parts.length; index += 1) {
+      if (shouldContinue) {
+        const gate = await shouldContinue();
+
+        if (!gate?.current) {
+          stopped = "superseded";
+          deps.logger.log(
+            "Reply parts: newer messages arrived, stopping",
+            { reason: gate?.reason ?? "unknown" },
+          );
+          break;
+        }
+      }
+
       if (index > 0) {
         const remaining = deadline - deps.now();
 
@@ -182,7 +197,7 @@ export function createReplySender(deps, tokenManager) {
 
     return {
       sentTexts,
-      reason: sentTexts.length > 0 ? null : "send-failed",
+      reason: stopped ?? (sentTexts.length > 0 ? null : "send-failed"),
     };
   }
 

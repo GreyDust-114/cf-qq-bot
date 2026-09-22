@@ -8,37 +8,33 @@ import {
   jsonResponse,
   listMessages,
   parseSendBody,
-  waitFor,
 } from "./support/index.js";
 
-test("consecutive messages: earlier one defers, latest replies with merged context", async () => {
+test("consecutive messages merge into one tracked batch and the latest context is used", async () => {
   const ctx = createTestContext({
     fetchHandlers: { llmReply: "收到" },
   });
 
-  const first = ctx.runtime.processIncomingMessage(
+  await ctx.runtime.processIncomingMessage(
     buildC2cPayload({ id: "c1", content: "第一条" }),
   );
-
-  await waitFor(() => ctx.clock.pendingCount() === 1, {
-    label: "first debounce sleep",
-  });
-
-  const second = ctx.runtime.processIncomingMessage(
+  await ctx.runtime.processIncomingMessage(
     buildC2cPayload({ id: "c2", content: "第二条" }),
   );
 
-  await waitFor(() => ctx.clock.pendingCount() === 2, {
-    label: "second debounce sleep",
-  });
+  // The trailing silence window resets on every arrival, so there is exactly
+  // one pending alarm and one merged batch, not two generation tasks.
+  assert.equal(ctx.hub.pendingAlarmCount(), 1);
 
-  ctx.clock.releaseNext();
-  await first;
+  const state = ctx.hub.stateFor("c2c:user-openid-1");
 
-  assert.ok(ctx.logger.has("Debounce: deferring to newer message"));
+  assert.equal(state.revision, 2);
+  assert.deepEqual(
+    state.pending.map((message) => message.eventId),
+    ["c1", "c2"],
+  );
 
-  ctx.clock.releaseNext();
-  await second;
+  await ctx.hub.runAllAlarms();
 
   assert.equal(ctx.fetch.llmCalls().length, 1);
 
@@ -59,6 +55,63 @@ test("consecutive messages: earlier one defers, latest replies with merged conte
   assert.equal(messages.filter((row) => row.role === "assistant").length, 1);
 });
 
+test("a reply that is superseded during generation is dropped before sending", async () => {
+  let ctx;
+  let llmIndex = 0;
+
+  ctx = createTestContext({
+    fetchHandlers: {
+      onRequest: async (call) => {
+        if (!call.url.endsWith("/chat/completions")) {
+          return null;
+        }
+
+        llmIndex += 1;
+
+        if (llmIndex === 1) {
+          // A newer message arrives while the first generation is in flight.
+          await ctx.runtime.processIncomingMessage(
+            buildC2cPayload({ id: "newer", content: "更晚的话" }),
+          );
+
+          return jsonResponse({
+            choices: [{ message: { content: "过时回复" } }],
+          });
+        }
+
+        return jsonResponse({
+          choices: [{ message: { content: "最新回复" } }],
+        });
+      },
+    },
+  });
+
+  await ctx.runtime.processIncomingMessage(
+    buildC2cPayload({ id: "older", content: "先说的话" }),
+  );
+  await ctx.hub.runAllAlarms();
+
+  const sentContents = ctx.fetch
+    .sendCalls()
+    .map((call) => parseSendBody(call).content);
+
+  assert.deepEqual(sentContents, ["最新回复"]);
+  assert.equal(ctx.fetch.llmCalls().length, 2);
+  assert.ok(ctx.logger.has("dropping stale reply"));
+  assert.ok(ctx.logger.has("newer-messages"));
+
+  const messages = await listMessages(ctx.env, "c2c:user-openid-1");
+
+  assert.deepEqual(
+    messages.map((row) => [row.role, row.content]),
+    [
+      ["user", "先说的话"],
+      ["user", "更晚的话"],
+      ["assistant", "最新回复"],
+    ],
+  );
+});
+
 test("a single reply is split into sequential parts with gaps", async () => {
   const sleeps = [];
   const ctx = createTestContext({
@@ -68,7 +121,7 @@ test("a single reply is split into sequential parts with gaps", async () => {
     fetchHandlers: { llmReply: "第一段|||第二段|||第三段" },
   });
 
-  await ctx.runtime.processIncomingMessage(
+  await ctx.deliver(
     buildC2cPayload({ id: "split-1", content: "分三条" }),
   );
 
@@ -83,9 +136,9 @@ test("a single reply is split into sequential parts with gaps", async () => {
     [1, 2, 3],
   );
 
-  // Debounce for an "always mentioned" c2c message plus two part gaps,
-  // all deterministic because the test random source is fixed at 0.5.
-  assert.deepEqual(sleeps, [4000, 800, 800]);
+  // Only the two part gaps; the debounce is a coordinator alarm now, not a
+  // sleep. Both gaps are deterministic because random is fixed at 0.5.
+  assert.deepEqual(sleeps, [800, 800]);
 
   const messages = await listMessages(ctx.env, "c2c:user-openid-1");
   const assistant = messages.filter((row) => row.role === "assistant");
@@ -102,7 +155,7 @@ test("reply parts are capped at three", async () => {
     fetchHandlers: { llmReply: "一|||二|||三|||四" },
   });
 
-  await ctx.runtime.processIncomingMessage(
+  await ctx.deliver(
     buildC2cPayload({ id: "split-2", content: "超过三条" }),
   );
 
@@ -118,7 +171,7 @@ test("HTTP send failure is not retried and does not store a reply", async () => 
     },
   });
 
-  await ctx.runtime.processIncomingMessage(
+  await ctx.deliver(
     buildC2cPayload({ id: "fail-1", content: "试试" }),
   );
 
@@ -145,7 +198,7 @@ test("network send failure is retried once and then succeeds", async () => {
     },
   });
 
-  await ctx.runtime.processIncomingMessage(
+  await ctx.deliver(
     buildC2cPayload({ id: "fail-2", content: "再试试" }),
   );
 
@@ -189,7 +242,7 @@ test("failed vision request falls back to a text-only retry", async () => {
     },
   });
 
-  await ctx.runtime.processIncomingMessage(
+  await ctx.deliver(
     buildC2cPayload({
       id: "vision-1",
       content: "看这个",
@@ -222,7 +275,7 @@ test("LLM failure still produces the private fallback reply", async () => {
     },
   });
 
-  await ctx.runtime.processIncomingMessage(
+  await ctx.deliver(
     buildC2cPayload({ id: "fallback-1", content: "还在吗" }),
   );
 
@@ -240,8 +293,12 @@ test("group decision NO_REPLY stays silent", async () => {
     fetchHandlers: { llmReply: "NO_REPLY" },
   });
 
-  await ctx.runtime.processIncomingMessage(
-    buildGroupPayload({ id: "group-1", content: "随便聊聊", mentioned: false }),
+  await ctx.deliver(
+    buildGroupPayload({
+      id: "group-1",
+      content: "随便聊聊",
+      mentioned: false,
+    }),
   );
 
   assert.equal(ctx.fetch.sendCalls().length, 0);
@@ -257,21 +314,21 @@ test("autonomous cooldown suppresses back-to-back interjections", async () => {
     fetchHandlers: { llmReply: "接句话" },
   });
 
-  const first = ctx.runtime.processIncomingMessage(
-    buildGroupPayload({ id: "group-2", content: "话题一", mentioned: false }),
+  await ctx.deliver(
+    buildGroupPayload({
+      id: "group-2",
+      content: "话题一",
+      mentioned: false,
+    }),
   );
 
-  await waitFor(() => ctx.clock.pendingCount() === 1);
-  ctx.clock.releaseNext();
-  await first;
-
-  const second = ctx.runtime.processIncomingMessage(
-    buildGroupPayload({ id: "group-3", content: "话题二", mentioned: false }),
+  await ctx.deliver(
+    buildGroupPayload({
+      id: "group-3",
+      content: "话题二",
+      mentioned: false,
+    }),
   );
-
-  await waitFor(() => ctx.clock.pendingCount() === 1);
-  ctx.clock.releaseNext();
-  await second;
 
   assert.equal(ctx.fetch.llmCalls().length, 2);
   assert.equal(ctx.fetch.sendCalls().length, 1);
