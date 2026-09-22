@@ -95,7 +95,7 @@ npx wrangler d1 list            # 找到 qq-ai-bot-db 的 database_id
 npx wrangler d1 create qq-ai-bot-db
 ```
 
-把真实 `database_id` 写进 `wrangler.toml` 的 `[[d1_databases]]`（当前是占位符 `REPLACE_WITH_D1_DATABASE_ID`）。
+把真实 `database_id` 写进 `wrangler.toml` 的 `[[d1_databases]]`（当前已填生产库 `qq-ai-bot-db`，换库时再改）。
 
 ### 3. 配置变量与机密
 
@@ -127,9 +127,11 @@ Durable Object 不需要手工建表：`wrangler.toml` 里的 `[[migrations]] ta
 ### 5. 部署与验证
 
 ```powershell
-npx wrangler deploy
-npx wrangler tail    # 实时日志
+npx wrangler deploy --keep-vars   # 保留控制台里已设置的明文变量（如灰度群 openid）
+npx wrangler tail                 # 实时日志
 ```
+
+`ALLOWED_GROUP_OPENID` 等仅属于当前环境的值可以只在控制台/首次部署时设置，之后用 `--keep-vars` 避免被 `wrangler.toml` 里的空值覆盖；机密始终由 `wrangler secret` 管理，不受影响。
 
 部署成功后访问 `https://<worker域名>/`，应返回 `QQ AI Bot is running.`。随后在 QQ 开放平台把回调地址指向 `https://<worker域名>/qq/webhook`。
 

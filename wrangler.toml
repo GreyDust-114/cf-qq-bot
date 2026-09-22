@@ -1,6 +1,6 @@
 name = "qq-ai-bot"
 main = "src/index.js"
-compatibility_date = "2026-08-04"
+compatibility_date = "2026-09-21"
 compatibility_flags = ["nodejs_compat"]
 
 [observability]
@@ -10,8 +10,7 @@ enabled = true
 binding = "DB"
 database_name = "qq-ai-bot-db"
 # 运行 `npx wrangler d1 list` 查看真实 ID，或 `npx wrangler d1 create qq-ai-bot-db` 创建。
-# 本地 `wrangler dev` 不校验该值，远程部署前必须替换。
-database_id = "REPLACE_WITH_D1_DATABASE_ID"
+database_id = "2186c566-d21f-4a08-86df-84d66cab4292"
 migrations_dir = "db/migrations"
 
 # 每个 conversationId 一个 ConversationHub 实例，负责会话级串行与 alarm。
@@ -24,7 +23,9 @@ tag = "v1"
 new_sqlite_classes = ["ConversationHub"]
 
 [vars]
-QQ_APP_ID = ""
+QQ_APP_ID = "1905655830"
 LLM_BASE_URL = "https://api.deepseek.com"
 LLM_MODEL = "deepseek-flash"
+# 灰度限制：生产环境用 `npx wrangler deploy --keep-vars` 保留已部署值；
+# 需要固定到仓库时再填入群 openid。
 ALLOWED_GROUP_OPENID = ""
