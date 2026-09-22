@@ -6,5 +6,7 @@ node_modules/
 sample/
 review-snapshots/
 runtime/
+AGENTS.md
+TODO.md
 *.log
 dist/
