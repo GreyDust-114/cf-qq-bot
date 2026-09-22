@@ -348,6 +348,18 @@ export function truncateReply(text) {
   return value.slice(0, MAX_REPLY_CHARS - 1) + "…";
 }
 
+// Removes a leading "[MM-DD HH:MM] " style prefix that the model sometimes
+// copies from the context metadata. Only the exact leading timestamp format
+// is touched; dates and times discussed inside the text survive.
+export function stripTimePrefix(text) {
+  return String(text ?? "")
+    .replace(
+      /^\s*\[(?:\d{4}-)?\d{2}-\d{2} \d{2}:\d{2}(?::\d{2})?\]\s*/,
+      "",
+    )
+    .trim();
+}
+
 export function mdToPlain(md) {
   let value = String(md ?? "");
 
@@ -522,7 +534,7 @@ export function buildPrivateMessages(context, incoming, options = {}) {
       role: "system",
       content:
         `当前时间：${formatNowForPrompt(options.now)}（北京时间）。` +
-        "聊天记录里每条消息前的时间戳是发送时间，可以参考它判断语境。",
+        "聊天记录里用户消息前的时间戳是发送时间，只用于理解语境，不要写进回复。",
     },
   ];
 
@@ -539,7 +551,10 @@ export function buildPrivateMessages(context, incoming, options = {}) {
     const role = row.role === "assistant" ? "assistant" : "user";
     const isCurrent =
       row.role === "user" && row.event_id === incoming.eventId;
-    const line = `[${formatMessageTime(row.created_at)}] ${row.content}`;
+    const line =
+      row.role === "assistant"
+        ? row.content
+        : `[${formatMessageTime(row.created_at)}] ${row.content}`;
 
     if (
       isCurrent &&
@@ -585,7 +600,7 @@ export function buildGroupMessages(context, incoming, options = {}) {
       role: "system",
       content:
         `当前时间：${formatNowForPrompt(options.now)}（北京时间）。` +
-        "聊天记录里每条消息前的时间戳是发送时间，可以参考它判断语境。",
+        "聊天记录里用户消息前的时间戳是发送时间，只用于理解语境，不要写进回复。",
     },
   ];
 
@@ -602,7 +617,7 @@ export function buildGroupMessages(context, incoming, options = {}) {
     if (row.role === "assistant") {
       messages.push({
         role: "assistant",
-        content: `[${formatMessageTime(row.created_at)}] ${row.content}`,
+        content: row.content,
       });
       return;
     }

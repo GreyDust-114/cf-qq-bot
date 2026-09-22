@@ -9,6 +9,7 @@ import {
 import {
   isRetryableSendError,
   replyPartGapMs,
+  stripTimePrefix,
 } from "./pure.js";
 
 export function createReplySender(deps, tokenManager) {
@@ -133,7 +134,7 @@ export function createReplySender(deps, tokenManager) {
     shouldContinue = null,
   ) {
     const parts = (Array.isArray(messages) ? messages : [])
-      .map((part) => String(part ?? "").trim())
+      .map((part) => stripTimePrefix(String(part ?? "").trim()))
       .filter(Boolean);
 
     if (parts.length === 0) {
