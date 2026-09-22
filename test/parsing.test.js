@@ -177,6 +177,45 @@ test("parseReplyOutput keeps the legacy separator fallback observable", () => {
   assert.equal(parsed.warning, "legacy-separator");
 });
 
+test("parseReplyOutput splits newlines inside one bubble", () => {
+  const parsed = parseReplyOutput(
+    '{"messages":["第一句，先说这个\\n\\n第二句，再说这个"]}',
+  );
+
+  assert.equal(parsed.kind, "messages");
+  assert.deepEqual(parsed.messages, [
+    "第一句，先说这个",
+    "第二句，再说这个",
+  ]);
+  assert.equal(parsed.warning, null);
+});
+
+test("plain-text fallback also splits paragraphs into bubbles", () => {
+  const parsed = parseReplyOutput("第一句，先说这个\n\n第二句，再说这个");
+
+  assert.equal(parsed.kind, "messages");
+  assert.deepEqual(parsed.messages, [
+    "第一句，先说这个",
+    "第二句，再说这个",
+  ]);
+  assert.equal(parsed.warning, "plain-text-fallback");
+});
+
+test("single line breaks also become separate bubbles", () => {
+  const parsed = parseReplyOutput("第一句\n第二句");
+
+  assert.deepEqual(parsed.messages, ["第一句", "第二句"]);
+});
+
+test("split bubbles still obey the three-bubble overflow merge", () => {
+  const parsed = parseReplyOutput(
+    '{"messages":["一\\n二","三","四"]}',
+  );
+
+  assert.deepEqual(parsed.messages, ["一", "二", "三 四"]);
+  assert.equal(parsed.warning, "merged-overflow");
+});
+
 test("replyPartGapMs grows with the previous bubble and stays bounded", () => {
   const random = () => 0.5;
 

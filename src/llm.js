@@ -18,6 +18,9 @@ export function createLlmClient(deps) {
       messages,
       thinking: { type: "enabled" },
       reasoning_effort: "low",
+      // Every generation path expects the structured reply/silent JSON
+      // protocol, so enforce JSON output instead of relying on the prompt.
+      response_format: { type: "json_object" },
       max_tokens: options.maxTokens ?? 2000,
       stream: false,
     };

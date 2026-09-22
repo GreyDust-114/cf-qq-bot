@@ -153,6 +153,45 @@ test("a structured reply sends its bubbles in order with length-aware gaps", asy
   );
 });
 
+test("a paragraph reply is split into separate QQ bubbles", async () => {
+  const ctx = createTestContext({
+    sleep: async () => {},
+    fetchHandlers: {
+      llmReply: "第一段\n\n第二段",
+    },
+  });
+
+  await ctx.deliver(
+    buildC2cPayload({ id: "split-paragraph", content: "讲讲" }),
+  );
+
+  const sends = ctx.fetch.sendCalls().map(parseSendBody);
+
+  assert.deepEqual(
+    sends.map((send) => send.content),
+    ["第一段", "第二段"],
+  );
+  assert.deepEqual(
+    sends.map((send) => send.msg_seq),
+    [1, 2],
+  );
+  assert.ok(ctx.logger.has("plain-text-fallback"));
+});
+
+test("reply requests ask DeepSeek for JSON output", async () => {
+  const ctx = createTestContext({
+    fetchHandlers: { llmReply: "好的" },
+  });
+
+  await ctx.deliver(
+    buildC2cPayload({ id: "json-mode-1", content: "嗨" }),
+  );
+
+  const body = JSON.parse(ctx.fetch.llmCalls()[0].body);
+
+  assert.deepEqual(body.response_format, { type: "json_object" });
+});
+
 test("overflow bubbles are merged into the last bubble, never silently dropped", async () => {
   const ctx = createTestContext({
     sleep: async () => {},

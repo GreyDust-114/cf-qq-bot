@@ -410,7 +410,13 @@ function stripCodeFence(value) {
 
 function finalizeReplyMessages(items) {
   const dropped = items.some((item) => typeof item !== "string");
+  // A bubble must be one complete sentence. Models often return one string
+  // with paragraph or line breaks inside it, so every line break starts a new
+  // bubble before the 1-3 bubble policy is applied.
   const messages = items
+    .flatMap((item) =>
+      typeof item === "string" ? item.split(/\r?\n+/) : [item],
+    )
     .filter((item) => typeof item === "string")
     .map((item) => mdToPlain(item))
     .filter(Boolean)
