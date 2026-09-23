@@ -31,7 +31,7 @@
 | `CONTEXT_MAX_CHARS` | 60000 | 上下文字符上限 |
 | `MAX_REPLY_PARTS` | 4 | 解析层气泡硬上限（提示词通常 1 条、最多 3 条） |
 | `BUBBLE_TARGET_MAX_CHARS` | 12 | 单条气泡目标长度 |
-| `MAX_REPLY_TOTAL_CHARS` | 30 | 单次回复硬字数预算 |
+| `MAX_REPLY_TOTAL_CHARS` | 40 | 单次回复硬字数预算（提示词软引导 20 字、被问设定时 30 字） |
 | `PART_GAP_MIN_MS / MAX` | 300 / 1500 | 气泡发送间隔上下限 |
 | `PART_GAP_PER_CHAR_MS` | 30 | 依据上一条长度增加间隔 |
 | `DEBOUNCE_MENTION_MIN_MS / MAX` | 3000 / 5000 | @ / 私聊静默窗口 |

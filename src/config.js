@@ -18,8 +18,9 @@ export const BUBBLE_TARGET_MAX_CHARS = 12;
 // bot keeps a human chat rhythm instead of composing paragraphs. The gray
 // group's human messages (small sample: two people) have a median length of
 // 8 characters and a median turn of 10 characters, so this is a deliberately
-// loose guardrail rather than a style rule.
-export const MAX_REPLY_TOTAL_CHARS = 30;
+// loose guardrail rather than a style rule. 40 leaves room for the extra
+// sentence a setting/lore answer needs without letting casual chat drift.
+export const MAX_REPLY_TOTAL_CHARS = 40;
 export const PART_GAP_MIN_MS = 300;
 export const PART_GAP_MAX_MS = 1500;
 export const PART_GAP_PER_CHAR_MS = 30;
