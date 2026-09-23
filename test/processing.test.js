@@ -215,8 +215,8 @@ test("a long bubble is sent as several short bubbles", async () => {
     sends.map((send) => send.content),
     [
       "那个包看着就痒，别挠啊",
-      "越挠越大，明天肿起来更难受",
-      "随便抹点东西吧",
+      "越挠越大",
+      "明天肿起来更难受",
     ],
   );
   assert.deepEqual(
@@ -253,10 +253,10 @@ test("overlong replies are trimmed before sending", async () => {
 
   const sends = ctx.fetch.sendCalls().map(parseSendBody);
 
-  assert.equal(sends.length, 3);
+  assert.equal(sends.length, 2);
   assert.equal(
     sends.map((send) => send.content).join(""),
-    "一二三四五六七八九十一二一二三四五六七八九十一二一二三四五六七八九十一二",
+    "一二三四五六七八九十一二一二三四五六七八九十一二",
   );
   assert.ok(ctx.logger.has("trimmed-total"));
 });

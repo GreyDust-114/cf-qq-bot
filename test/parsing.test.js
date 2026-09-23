@@ -149,9 +149,10 @@ test("long bubbles are split at punctuation into short bubbles without dangling 
   assert.equal(parsed.kind, "messages");
   assert.deepEqual(parsed.messages, [
     "那个包看着就痒，别挠啊",
-    "越挠越大，明天肿起来更难受",
-    "随便抹点东西吧",
+    "越挠越大",
+    "明天肿起来更难受",
   ]);
+  assert.equal(parsed.warning, "trimmed-total");
 });
 
 test("model bubbles stay separate when they are already short", () => {
@@ -170,16 +171,32 @@ test("non-final separator punctuation is removed but internal and final punctuat
   assert.deepEqual(parsed.messages, [
     "那就别再开新的了",
     "改完立刻关电脑",
-    "晚安。",
+    "晚安",
   ]);
 });
 
-test("a single bubble keeps its own final punctuation", () => {
+test("trailing separators and periods are cleaned even for a single bubble", () => {
   const parsed = parseReplyOutput(
     '{"messages":["那就别再开新的了，"]}',
   );
 
-  assert.deepEqual(parsed.messages, ["那就别再开新的了，"]);
+  assert.deepEqual(parsed.messages, ["那就别再开新的了"]);
+});
+
+test("question and exclamation marks are kept because humans use them", () => {
+  const parsed = parseReplyOutput(
+    '{"messages":["真的？","好耶！"]}',
+  );
+
+  assert.deepEqual(parsed.messages, ["真的？", "好耶！"]);
+});
+
+test("trailing periods are dropped like casual chat lines", () => {
+  const parsed = parseReplyOutput(
+    '{"messages":["好的。","我知道了。"]}',
+  );
+
+  assert.deepEqual(parsed.messages, ["好的", "我知道了"]);
 });
 
 test("overflow beyond four bubbles is merged without dropping content", () => {
@@ -220,8 +237,8 @@ test("long replies are trimmed to the total character budget", () => {
   );
 
   assert.equal(parsed.kind, "messages");
-  assert.equal(parsed.messages.length, 3);
-  assert.equal(parsed.messages.join("").length, 36);
+  assert.equal(parsed.messages.length, 2);
+  assert.equal(parsed.messages.join("").length, 24);
   assert.equal(parsed.warning, "trimmed-total");
 });
 
@@ -236,7 +253,7 @@ test("a single overlong bubble is truncated at the budget with an ellipsis", () 
 
   assert.equal(parsed.kind, "messages");
   assert.equal(parsed.messages.length, 1);
-  assert.ok(parsed.messages[0].length <= 40);
+  assert.ok(parsed.messages[0].length <= 30);
   assert.ok(parsed.messages[0].endsWith("…"));
   assert.equal(parsed.warning, "trimmed-total");
 });

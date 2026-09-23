@@ -556,10 +556,14 @@ function finalizeReplyMessages(items) {
   const messages = trimmedResult.bubbles.map((bubble) =>
     truncateReply(bubble),
   );
-  const normalized = messages.map((message, index) =>
-    index < messages.length - 1
-      ? message.replace(/[，,、；;：:]\s*$/, "").trim()
-      : message,
+  // Chat style: trailing separators never belong at a bubble edge, and a
+  // closing period is unusual in human messages. Question/exclamation marks
+  // are kept because people do use them.
+  const normalized = messages.map((message) =>
+    message
+      .replace(/[，,、；;：:]\s*$/, "")
+      .replace(/。\s*$/, "")
+      .trim(),
   );
 
   return {
