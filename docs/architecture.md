@@ -103,4 +103,4 @@ QQ access token 与过期时间。
 | `src/llm.js` | DeepSeek 调用与图片回退 |
 | `src/sender.js` | 单气泡 QQ 发送与有限网络重试 |
 | `src/pure.js` | 消息解析、提示词消息构建、正文清理与气泡切分 |
-| `src/prompts.js` | 示例提示词、人设和结构化输出协议 |
+| `src/prompts.js` | 全部提示词、人设、输出协议与兜底话术（唯一编辑入口） |

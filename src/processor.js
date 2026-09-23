@@ -15,6 +15,10 @@ import {
 } from "./config.js";
 import { createDependencies } from "./dependencies.js";
 import { createLlmClient } from "./llm.js";
+import {
+  FALLBACK_ERROR_REPLY,
+  FALLBACK_MENTION_REPLY,
+} from "./prompts.js";
 import { createReplySender } from "./sender.js";
 import { createStore } from "./store.js";
 import { createTokenManager } from "./token.js";
@@ -26,9 +30,6 @@ import {
   replyPartGapMs,
   stripTimePrefix,
 } from "./pure.js";
-
-const ERROR_REPLY = "AI 服务暂时无法响应，请稍后再试。";
-const MENTION_FALLBACK_REPLY = "刚刚走神了一下，你再说一次？";
 
 export function createProcessor(env, overrides = {}) {
   const deps = createDependencies(env, overrides);
@@ -320,7 +321,7 @@ export function createProcessor(env, overrides = {}) {
       deps.logger.error("stage=llm private failed:", error);
       return sendAndStore(
         trigger,
-        [ERROR_REPLY],
+        [FALLBACK_ERROR_REPLY],
         deadline,
         tokenPromise,
         isCurrent,
@@ -330,7 +331,7 @@ export function createProcessor(env, overrides = {}) {
 
     return sendAndStore(
       trigger,
-      resolveReplyMessages(raw, "private", ERROR_REPLY),
+      resolveReplyMessages(raw, "private", FALLBACK_ERROR_REPLY),
       deadline,
       tokenPromise,
       isCurrent,
@@ -373,7 +374,7 @@ export function createProcessor(env, overrides = {}) {
       );
       const outcome = await sendAndStore(
         trigger,
-        [MENTION_FALLBACK_REPLY],
+        [FALLBACK_MENTION_REPLY],
         deadline,
         tokenPromise,
         isCurrent,
@@ -384,7 +385,7 @@ export function createProcessor(env, overrides = {}) {
 
     const outcome = await sendAndStore(
       trigger,
-      resolveReplyMessages(raw, route, MENTION_FALLBACK_REPLY),
+      resolveReplyMessages(raw, route, FALLBACK_MENTION_REPLY),
       deadline,
       tokenPromise,
       isCurrent,

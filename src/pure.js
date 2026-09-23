@@ -20,6 +20,12 @@ import {
   GROUP_MENTION_SYSTEM_PROMPT,
   GROUP_CONTINUATION_SYSTEM_PROMPT,
   PRIVATE_SYSTEM_PROMPT,
+  GROUP_MENTION_HINT,
+  GROUP_NO_MENTION_HINT,
+  GROUP_CONTINUATION_HINT,
+  groupSummaryPrompt,
+  privateSummaryPrompt,
+  timeContextPrompt,
 } from "./prompts.js";
 
 export function randomBetween(minMs, maxMs, random) {
@@ -671,16 +677,14 @@ export function buildPrivateMessages(context, incoming, options = {}) {
     { role: "system", content: PRIVATE_SYSTEM_PROMPT },
     {
       role: "system",
-      content:
-        `当前时间：${formatNowForPrompt(options.now)}（北京时间）。` +
-        "聊天记录里用户消息前的时间戳是发送时间，只用于理解语境，不要写进回复。",
+      content: timeContextPrompt(formatNowForPrompt(options.now)),
     },
   ];
 
   if (context.summary) {
     messages.push({
       role: "system",
-      content: `此前对话的摘要：\n${context.summary}`,
+      content: privateSummaryPrompt(context.summary),
     });
   }
 
@@ -737,16 +741,14 @@ export function buildGroupMessages(context, incoming, options = {}) {
     },
     {
       role: "system",
-      content:
-        `当前时间：${formatNowForPrompt(options.now)}（北京时间）。` +
-        "聊天记录里用户消息前的时间戳是发送时间，只用于理解语境，不要写进回复。",
+      content: timeContextPrompt(formatNowForPrompt(options.now)),
     },
   ];
 
   if (context.summary) {
     messages.push({
       role: "system",
-      content: `群聊长期摘要：\n${context.summary}`,
+      content: groupSummaryPrompt(context.summary),
     });
   }
 
@@ -768,12 +770,10 @@ export function buildGroupMessages(context, incoming, options = {}) {
 
     if (isCurrent && decision) {
       text += incoming.wasMentioned
-        ? "\n\n[系统提示] 这条消息明确 @ 了你，必须回复。"
-        : "\n\n[系统提示] 这条消息没有 @ 你，请按群聊规则判断是否需要回复。";
+        ? GROUP_MENTION_HINT
+        : GROUP_NO_MENTION_HINT;
     } else if (isCurrent && options.continuation) {
-      text +=
-        "\n\n[系统提示] 这条消息来自刚刚和你聊过的群友，" +
-        "是刚才话题的继续，请直接自然地接话。";
+      text += GROUP_CONTINUATION_HINT;
     }
 
     if (
