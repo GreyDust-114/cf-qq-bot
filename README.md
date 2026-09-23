@@ -46,28 +46,30 @@ Durable Object: ConversationHub
 
 ```powershell
 npm install
-Copy-Item .dev.vars.example .dev.vars
+Copy-Item wrangler.toml.example wrangler.toml   # 填入自己的 D1 / AppID / 灰度群
+Copy-Item .dev.vars.example .dev.vars           # 填入本地机密
 npx wrangler d1 migrations apply qq-ai-bot-db --local
 npm run dev
 ```
 
-在 `.dev.vars` 中填写本地机密；生产机密使用 `wrangler secret`，不要提交真实密钥。
+在 `.dev.vars` 中填写本地机密；生产机密使用 `wrangler secret`，不要提交真实密钥。真实的 `wrangler.toml` 含环境专属标识，已被 gitignore，公开仓库只保留 `wrangler.toml.example`。
 
 ## 部署
 
 ```powershell
 npx wrangler login
+Copy-Item wrangler.toml.example wrangler.toml   # 首次：填入 D1 / AppID / 灰度群
 npx wrangler d1 migrations apply qq-ai-bot-db --remote
 npm run deploy
 ```
 
-部署前需要在 `wrangler.toml` 配置 D1、QQ AppID、模型和灰度群。完整步骤见 [部署文档](docs/deployment.md)。
+部署前需要在本地 `wrangler.toml` 配置 D1、QQ AppID、模型和灰度群。完整步骤见 [部署文档](docs/deployment.md)。
 
 ## 仓库范围
 
 公开仓库保留主要源码、D1 migrations、Cloudflare 配置和正式文档。
 
-维护者本地的测试、测试 adapter、工程 Runtime、审查截图、Git hooks 和辅助脚本不进入 GitHub 当前文件树；这些文件仍可在维护者工作区中使用。
+维护者本地的测试、测试 adapter、工程 Runtime、审查截图、Git hooks、辅助脚本、`.dev.vars` 与含真实环境标识的 `wrangler.toml` 不进入 GitHub 当前文件树；这些文件仍可在维护者工作区中使用。
 
 ## 文档
 

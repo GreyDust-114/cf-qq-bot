@@ -15,6 +15,16 @@ npm install
 npx wrangler login
 ```
 
+## 配置
+
+首次使用时从模板创建本地配置：
+
+```powershell
+Copy-Item wrangler.toml.example wrangler.toml
+```
+
+真实的 `wrangler.toml` 已被 gitignore，不会进入公开仓库。
+
 ## D1
 
 查找或创建数据库：
@@ -24,7 +34,7 @@ npx wrangler d1 list
 npx wrangler d1 create qq-ai-bot-db
 ```
 
-将真实 `database_id` 写入 `wrangler.toml`。
+将真实 `database_id` 写入本地 `wrangler.toml`。
 
 应用迁移：
 
@@ -43,7 +53,7 @@ npx wrangler d1 migrations apply qq-ai-bot-db --remote
 
 ## 变量与机密
 
-非机密变量位于 `wrangler.toml`；机密通过 Wrangler 写入：
+非机密变量位于本地 `wrangler.toml`（参考公开模板 `wrangler.toml.example`）；机密通过 Wrangler 写入：
 
 ```powershell
 npx wrangler secret put QQ_APP_SECRET

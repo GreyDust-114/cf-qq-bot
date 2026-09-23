@@ -2,6 +2,8 @@
 
 ## Cloudflare 绑定
 
+绑定在本地 `wrangler.toml` 中声明；公开仓库仅提供 `wrangler.toml.example` 模板（含占位符），不包含真实环境标识。
+
 | 名称 | 类型 | 说明 |
 |---|---|---|
 | `CONVERSATION_HUB` | Durable Object namespace | 按 conversationId 寻址的会话协调器 |

@@ -1,0 +1,41 @@
+# Copy this file to `wrangler.toml` and fill in your own environment values.
+#
+# The real `wrangler.toml` is gitignored: it contains environment-specific
+# identifiers (D1 id, QQ AppID, gray-release group openid) that should not be
+# published. Secrets (QQ_APP_SECRET, LLM_API_KEY) never belong in this file;
+# use `wrangler secret put` or a local `.dev.vars`.
+
+name = "qq-ai-bot"
+main = "src/index.js"
+compatibility_date = "2026-09-21"
+compatibility_flags = ["nodejs_compat"]
+
+[observability]
+enabled = true
+
+[[d1_databases]]
+binding = "DB"
+database_name = "qq-ai-bot-db"
+# `npx wrangler d1 list` shows the real id; create one with
+# `npx wrangler d1 create qq-ai-bot-db` if it does not exist yet.
+database_id = "REPLACE_WITH_D1_DATABASE_ID"
+migrations_dir = "db/migrations"
+
+# One ConversationHub Durable Object per conversationId, responsible for
+# serialized per-conversation batches and alarms.
+[[durable_objects.bindings]]
+name = "CONVERSATION_HUB"
+class_name = "ConversationHub"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["ConversationHub"]
+
+[vars]
+# QQ bot AppID. Not a secret, but environment-specific.
+QQ_APP_ID = ""
+LLM_BASE_URL = "https://api.deepseek.com"
+LLM_MODEL = "deepseek-flash"
+# Gray-release restriction: only respond in this group openid; empty means
+# no restriction.
+ALLOWED_GROUP_OPENID = ""
