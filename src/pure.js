@@ -7,6 +7,7 @@ import {
   MAX_IMAGE_URL_LENGTH,
   MAX_REPLY_CHARS,
   MAX_REPLY_PARTS,
+  MAX_REPLY_TOTAL_CHARS,
   BUBBLE_TARGET_MAX_CHARS,
   PART_GAP_MAX_MS,
   PART_GAP_MIN_MS,
@@ -459,6 +460,50 @@ function splitLongBubble(bubble, maxChars) {
   return packClauses(clauses, maxChars);
 }
 
+function truncateBubbleToBudget(bubble, budget) {
+  const clauses = splitIntoClauses(bubble);
+  let out = "";
+
+  for (const clause of clauses) {
+    if (out && out.length + clause.length > budget) {
+      break;
+    }
+
+    out += clause;
+  }
+
+  // A punctuation-less sentence can be one huge clause; hard-slice it so the
+  // budget still holds.
+  if (out.length > budget || !out) {
+    out = out.slice(0, Math.max(1, budget - 1));
+  }
+
+  return `${out.replace(/[，,、；;：:]\s*$/, "")}…`;
+}
+
+function trimToTotalBudget(bubbles, maxTotal) {
+  const kept = [];
+  let total = 0;
+
+  for (const bubble of bubbles) {
+    if (kept.length === 0 && bubble.length > maxTotal) {
+      return {
+        bubbles: [truncateBubbleToBudget(bubble, maxTotal)],
+        trimmed: true,
+      };
+    }
+
+    if (kept.length > 0 && total + bubble.length > maxTotal) {
+      break;
+    }
+
+    kept.push(bubble);
+    total += bubble.length;
+  }
+
+  return { bubbles: kept, trimmed: kept.length < bubbles.length };
+}
+
 function mergeToCap(bubbles, maxParts) {
   const result = bubbles.slice();
 
@@ -507,7 +552,10 @@ function finalizeReplyMessages(items) {
     splitLongBubble(bubble, BUBBLE_TARGET_MAX_CHARS),
   );
   const merged = mergeToCap(split, MAX_REPLY_PARTS);
-  const messages = merged.map((bubble) => truncateReply(bubble));
+  const trimmedResult = trimToTotalBudget(merged, MAX_REPLY_TOTAL_CHARS);
+  const messages = trimmedResult.bubbles.map((bubble) =>
+    truncateReply(bubble),
+  );
   const normalized = messages.map((message, index) =>
     index < messages.length - 1
       ? message.replace(/[，,、；;：:]\s*$/, "").trim()
@@ -517,8 +565,9 @@ function finalizeReplyMessages(items) {
   return {
     kind: "messages",
     messages: normalized,
-    warning:
-      merged.length < split.length
+    warning: trimmedResult.trimmed
+      ? "trimmed-total"
+      : merged.length < split.length
         ? "merged-overflow"
         : dropped
           ? "non-string-bubble"

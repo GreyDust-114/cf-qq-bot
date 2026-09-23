@@ -213,6 +213,43 @@ test("merged bubbles are connected with a separator instead of running on", () =
   assert.equal(parsed.warning, "merged-overflow");
 });
 
+test("long replies are trimmed to the total character budget", () => {
+  const bubble = "一二三四五六七八九十一二"; // 12 chars
+  const parsed = parseReplyOutput(
+    JSON.stringify({ messages: [bubble, bubble, bubble, bubble] }),
+  );
+
+  assert.equal(parsed.kind, "messages");
+  assert.equal(parsed.messages.length, 3);
+  assert.equal(parsed.messages.join("").length, 36);
+  assert.equal(parsed.warning, "trimmed-total");
+});
+
+test("a single overlong bubble is truncated at the budget with an ellipsis", () => {
+  const parsed = parseReplyOutput(
+    JSON.stringify({
+      messages: [
+        "一二三四五六七八九十一二三四五六七八九十一二三四五六七八九十一二三四五六七八九十五",
+      ],
+    }),
+  );
+
+  assert.equal(parsed.kind, "messages");
+  assert.equal(parsed.messages.length, 1);
+  assert.ok(parsed.messages[0].length <= 40);
+  assert.ok(parsed.messages[0].endsWith("…"));
+  assert.equal(parsed.warning, "trimmed-total");
+});
+
+test("short replies are not affected by the total budget", () => {
+  const parsed = parseReplyOutput(
+    '{"messages":["好的","没问题"]}',
+  );
+
+  assert.deepEqual(parsed.messages, ["好的", "没问题"]);
+  assert.equal(parsed.warning, null);
+});
+
 test("parseReplyOutput merges overflow bubbles instead of dropping them", () => {
   const parsed = parseReplyOutput(
     '{"messages":["一","二","三","四","五"]}',

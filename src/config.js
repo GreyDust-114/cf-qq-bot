@@ -14,6 +14,9 @@ export const MAX_REPLY_PARTS = 4;
 // Target maximum characters per bubble. Longer model output is split at
 // punctuation so replies read like chat instead of paragraphs.
 export const BUBBLE_TARGET_MAX_CHARS = 15;
+// Hard budget for one reply. Content beyond it is dropped/truncated so the
+// bot keeps a human chat rhythm instead of composing paragraphs.
+export const MAX_REPLY_TOTAL_CHARS = 40;
 export const PART_GAP_MIN_MS = 300;
 export const PART_GAP_MAX_MS = 1500;
 export const PART_GAP_PER_CHAR_MS = 30;

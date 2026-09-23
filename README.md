@@ -176,7 +176,7 @@ npx wrangler deploy --dry-run --outdir dist
 | revision 检查 | 生成期间有新消息时，旧结果在发送前被丢弃；分条发送中途也会检查，新消息到达就停止剩余气泡 |
 | alarm 恢复 | 批次先写入 Durable Object storage 再处理；实例崩溃后下一个 alarm 接管，失败自动重试并记录错误 |
 | 活跃聊天 | 群聊里机器人回复后进入 90 秒活跃期；原发言者的未 @ 续句直接进入回复路径，其他成员仍由模型判断 |
-| 分条发送 | 模型按提示词返回 JSON 消息数组，条数按内容自然决定（最多 4 条短气泡，单条尽量 15 字以内，总字数尽量 30 字以内）；超过目标长度的气泡按标点切短，溢出时用逗号连接后均衡合并且不产生超长气泡；`msg_seq` 递增，条间隔按上一条长度自适应 |
+| 分条发送 | 模型按提示词返回 JSON 消息数组，通常 1 条、最多 4 条短气泡（单条尽量 15 字、总字数尽量 25 字）；超过目标长度的气泡按标点切短，溢出时用逗号连接后均衡合并；超过 40 字硬预算的内容从尾部裁剪并在日志标注；`msg_seq` 递增，条间隔按上一条长度自适应 |
 | 发送 outbox | 每个气泡先写 `pending` 记录再发送，成功后立即标记 `sent` 并写入独立 assistant 记录；失败/超时记为 `failed`/`uncertain`，批次重跑不会重发已发送或结果不确定的气泡 |
 | 自主发言冷却 | 群聊中未被 @ 时，新话题的主动发言之间随机冷却；活跃期内原发言者的续句不受冷却影响 |
 | 思考模式 | 全部场景 `thinking: enabled` + `reasoning_effort: low` |
@@ -198,6 +198,7 @@ npx wrangler deploy --dry-run --outdir dist
 | `MAX_REPLY_CHARS` | 1800 | 单条回复最大长度 |
 | `MAX_REPLY_PARTS` | 4 | 分条发送硬上限（条数由内容和总字数预算动态决定） |
 | `BUBBLE_TARGET_MAX_CHARS` | 15 | 单条气泡目标长度，超过则按标点切短 |
+| `MAX_REPLY_TOTAL_CHARS` | 40 | 单次回复总字数硬上限，超出从尾部裁剪并记 trimmed-total |
 | `PART_GAP_MIN_MS` / `MAX` | 300 / 1500 | 分条之间的间隔上下限 |
 | `PART_GAP_PER_CHAR_MS` | 30 | 上一条气泡每字符增加的间隔 |
 | `DEBOUNCE_MENTION_MIN_MS` / `MAX` | 3000 / 5000 | @ 消息静默窗口 |
@@ -228,7 +229,8 @@ stage=coordinator batch retry scheduled   批次失败，已安排重试（attem
 stage=coordinator batch abandoned         超过重试上限，保留 failed_batch 记录
 Route: active / mention / autonomous      本批次走的路由
 Active window opened:                     机器人回复后开启 90 秒活跃期
-Reply parse warning: merged-overflow      超过 3 条，已合并进最后一条
+Reply parse warning: merged-overflow      超过条数上限，已均衡合并
+Reply parse warning: trimmed-total         超过总字数硬预算，已从尾部裁剪
 Reply parse warning: plain-text-fallback  模型返回纯文本，按单条气泡兜底
 stage=reply invalid                       结构化输出无法解析，使用安全兜底
 Reply parts: newer messages arrived, stopping  新消息到达，停止剩余气泡

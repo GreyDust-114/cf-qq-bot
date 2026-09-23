@@ -236,6 +236,31 @@ test("a long bubble is sent as several short bubbles", async () => {
   );
 });
 
+test("overlong replies are trimmed before sending", async () => {
+  const bubble = "一二三四五六七八九十一二"; // 12 chars
+  const ctx = createTestContext({
+    sleep: async () => {},
+    fetchHandlers: {
+      llmReply: JSON.stringify({
+        messages: [bubble, bubble, bubble, bubble],
+      }),
+    },
+  });
+
+  await ctx.deliver(
+    buildC2cPayload({ id: "trim-total", content: "说多点" }),
+  );
+
+  const sends = ctx.fetch.sendCalls().map(parseSendBody);
+
+  assert.equal(sends.length, 3);
+  assert.equal(
+    sends.map((send) => send.content).join(""),
+    "一二三四五六七八九十一二一二三四五六七八九十一二一二三四五六七八九十一二",
+  );
+  assert.ok(ctx.logger.has("trimmed-total"));
+});
+
 test("overflow bubbles are merged without dropping content", async () => {
   const ctx = createTestContext({
     sleep: async () => {},
