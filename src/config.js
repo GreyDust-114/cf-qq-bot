@@ -15,9 +15,10 @@ export const MAX_REPLY_PARTS = 4;
 // punctuation so replies read like chat instead of paragraphs.
 export const BUBBLE_TARGET_MAX_CHARS = 12;
 // Hard budget for one reply. Content beyond it is dropped/truncated so the
-// bot keeps a human chat rhythm instead of composing paragraphs. Human
-// messages in the gray group have a median length of 8 characters and a
-// median turn of 10 characters.
+// bot keeps a human chat rhythm instead of composing paragraphs. The gray
+// group's human messages (small sample: two people) have a median length of
+// 8 characters and a median turn of 10 characters, so this is a deliberately
+// loose guardrail rather than a style rule.
 export const MAX_REPLY_TOTAL_CHARS = 30;
 export const PART_GAP_MIN_MS = 300;
 export const PART_GAP_MAX_MS = 1500;

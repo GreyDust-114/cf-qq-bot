@@ -171,11 +171,11 @@ test("non-final separator punctuation is removed but internal and final punctuat
   assert.deepEqual(parsed.messages, [
     "那就别再开新的了",
     "改完立刻关电脑",
-    "晚安",
+    "晚安。",
   ]);
 });
 
-test("trailing separators and periods are cleaned even for a single bubble", () => {
+test("trailing separators are cleaned even for a single bubble", () => {
   const parsed = parseReplyOutput(
     '{"messages":["那就别再开新的了，"]}',
   );
@@ -191,12 +191,12 @@ test("question and exclamation marks are kept because humans use them", () => {
   assert.deepEqual(parsed.messages, ["真的？", "好耶！"]);
 });
 
-test("trailing periods are dropped like casual chat lines", () => {
+test("periods are left to the model's own style", () => {
   const parsed = parseReplyOutput(
     '{"messages":["好的。","我知道了。"]}',
   );
 
-  assert.deepEqual(parsed.messages, ["好的", "我知道了"]);
+  assert.deepEqual(parsed.messages, ["好的。", "我知道了。"]);
 });
 
 test("overflow beyond four bubbles is merged without dropping content", () => {
