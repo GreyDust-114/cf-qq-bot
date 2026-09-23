@@ -42,6 +42,7 @@ Durable Object「ConversationHub」（每个会话一个）
 | `src/dependencies.js` | 依赖注入接缝：时钟、sleep、随机、fetch、logger |
 | `src/prompts.js` | 全部提示词：人设「新約エクシア」+ 群聊决策 / @ 回复 / 私聊 |
 | `db/migrations/` | D1 schema 迁移文件 |
+| `docs/gray-acceptance-2026-09-23.md` | 生产灰度验收明细、指标与回滚步骤 |
 | `test/` | 离线回归测试（Node 内置 test runner）；`test/support/` 放测试环境：内存 D1 adapter、假 fetch、手动时钟、payload 构造器、按会话隔离的内存协调器 hub |
 | `scripts/` | 开发工具：语法检查、提交信息校验 |
 | `.githooks/` `.gitmessage` | commit-msg 钩子与提交模板 |
@@ -188,6 +189,22 @@ npx wrangler deploy --dry-run --outdir dist
 | 消息去重 | `messages.event_id` 唯一约束，QQ 重推事件不会重复回复 |
 | Token 缓存 | access_token 存 D1，冷启动不再每次都请求 QQ |
 
+## 生产灰度验收（2026-09-23）
+
+版本 `f8021375` 在限定群连续观测约 5.4 小时：
+
+| 指标 | 结果 |
+|---|---|
+| 气泡长度 | 中位数 8 字，P90 12 字，最大 13 字 |
+| 单轮总长 | 中位数 11 字，P90 18 字，最大 27 字 |
+| 条数分布 | 1 条 69.1%，2 条 25.9%，3 条 4.9%，4 条 0 |
+| 活跃续聊 | active 33 replied / 4 stale，0 silent / cooldown |
+| outbox | sent 99、pending 11、failed 0、uncertain 0；关联缺失与重复发送均为 0 |
+| 正文格式 | 时间前缀、气泡内换行、悬空分隔标点均为 0 |
+| 性能 | LLM P90 1891ms；QQ 发送 P90 2180ms |
+
+人类参考样本（两位群友）单条中位数 7 字、一轮总长中位数 12 字，仅用于长度护栏，不作为句号或语气词的硬规则。详细证据、pending 解释、告警条件与回滚步骤见 [`docs/gray-acceptance-2026-09-23.md`](docs/gray-acceptance-2026-09-23.md)。
+
 ## 可调参数（src/config.js）
 
 | 常量 | 当前值 | 作用 |
@@ -257,6 +274,7 @@ LLM time budget exhausted  模型时间不够（需要调小防抖或关闭思�
 - 频繁 `stage=send` 超时：QQ 接口偶发慢，属网络波动；连续出现可考虑 Cloudflare Queue
 - 频繁 `recovering stale batch`：说明单次生成超过 `PROCESSING_STALE_MS` 或实例频繁被驱逐，检查 LLM 耗时
 - 群里明明在对话却判 `NO_REPLY`：检查是否在 `ACTIVE_WINDOW_MS` 内、消息是否来自最后被回复的那个人；其他人的消息仍会走模型判断
+- outbox 存在旧 `pending`：先按 `batch_id` 查 `batch done`；`stale` 表示被更新消息取代，`replied` + pending 表示已发出前序气泡后停止剩余气泡。只有缺少终态且年龄超过 `PROCESSING_STALE_MS` 才视为卡死
 - 想清空聊天记忆：D1 控制台执行 `DELETE FROM messages; DELETE FROM conversations;`（`settings` 表不要动）
 
 ## 已知限制
@@ -270,4 +288,5 @@ LLM time budget exhausted  模型时间不够（需要调小防抖或关闭思�
 
 ## 相关文档
 
+- [生产灰度验收记录（2026-09-23）](docs/gray-acceptance-2026-09-23.md)
 - 人设素材来源：PRTS 明日方舟中文 Wiki（能天使 / 新约能天使 / 拉特兰 / 企鹅物流）
