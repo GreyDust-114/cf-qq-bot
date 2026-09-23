@@ -98,6 +98,25 @@ export function createStore(deps) {
     };
   }
 
+  // Character lore: written by the local corpus sync script and read on every
+  // batch. A missing table (migration not applied) must not break replies.
+  async function loadLore() {
+    try {
+      const { results } = await db()
+        .prepare(
+          `SELECT title, content
+           FROM lore
+           ORDER BY sort_order, id`,
+        )
+        .all();
+
+      return results ?? [];
+    } catch (error) {
+      deps.logger.error("lore read failed:", error);
+      return [];
+    }
+  }
+
   async function storeAssistantMessage(conversationId, content) {
     const result = await db()
       .prepare(
@@ -306,6 +325,7 @@ export function createStore(deps) {
     ensureConversation,
     storeIncomingMessage,
     loadConversationContext,
+    loadLore,
     storeAssistantMessage,
     getNextAutonomousAt,
     markAutonomousReply,

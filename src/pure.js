@@ -24,7 +24,10 @@ import {
   GROUP_NO_MENTION_HINT,
   GROUP_CONTINUATION_HINT,
   groupSummaryPrompt,
+  loreMessage,
   privateSummaryPrompt,
+  PROTOCOL_REMINDER_DECISION,
+  PROTOCOL_REMINDER_REPLY,
   timeContextPrompt,
 } from "./prompts.js";
 
@@ -688,6 +691,14 @@ export function buildPrivateMessages(context, incoming, options = {}) {
     });
   }
 
+  const lore = loreMessage(context.lore);
+
+  if (lore) {
+    messages.push({ role: "system", content: lore });
+  }
+
+  messages.push({ role: "system", content: PROTOCOL_REMINDER_REPLY });
+
   const history = mergeConsecutiveUserMessages(context.messages);
 
   history.forEach((row) => {
@@ -751,6 +762,19 @@ export function buildGroupMessages(context, incoming, options = {}) {
       content: groupSummaryPrompt(context.summary),
     });
   }
+
+  const lore = loreMessage(context.lore);
+
+  if (lore) {
+    messages.push({ role: "system", content: lore });
+  }
+
+  messages.push({
+    role: "system",
+    content: decision
+      ? PROTOCOL_REMINDER_DECISION
+      : PROTOCOL_REMINDER_REPLY,
+  });
 
   const history = mergeConsecutiveUserMessages(context.messages);
 

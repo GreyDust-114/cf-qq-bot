@@ -487,10 +487,14 @@ export function createProcessor(env, overrides = {}) {
     // The messages were recorded when the coordinator accepted them; the
     // batch itself stays in Durable Object storage, so this only reads facts.
     const session = await store.loadConversationContext(conversationId);
+    // Character lore is optional: an empty lore table simply means the
+    // prompt runs without the knowledge block.
+    const lore = await store.loadLore();
+    const promptContext = { ...session, lore };
 
     deps.logger.log(
-      `Context loaded: ${session.messages.length} messages ` +
-        `in ${deps.now() - startedAt}ms`,
+      `Context loaded: ${session.messages.length} messages, ` +
+        `${lore.length} lore entries in ${deps.now() - startedAt}ms`,
     );
 
     const mentioned = messages.some(
@@ -555,7 +559,7 @@ export function createProcessor(env, overrides = {}) {
     if (trigger.scope === "c2c") {
       return replyToPrivateMessage(
         trigger,
-        session,
+        promptContext,
         deadline,
         tokenPromise,
         context.isCurrent,
@@ -566,7 +570,7 @@ export function createProcessor(env, overrides = {}) {
     if (mentioned) {
       return replyToAddressedGroupMessage(
         trigger,
-        session,
+        promptContext,
         deadline,
         tokenPromise,
         context.isCurrent,
@@ -577,7 +581,7 @@ export function createProcessor(env, overrides = {}) {
     if (speakerContinues) {
       return replyToAddressedGroupMessage(
         trigger,
-        session,
+        promptContext,
         deadline,
         tokenPromise,
         context.isCurrent,
@@ -588,7 +592,7 @@ export function createProcessor(env, overrides = {}) {
 
     return decideGroupAutonomous(
       trigger,
-      session,
+      promptContext,
       deadline,
       tokenPromise,
       context.isCurrent,
