@@ -475,11 +475,13 @@ function mergeToCap(bubbles, maxParts) {
       }
     }
 
-    result.splice(
-      bestIndex,
-      2,
-      result[bestIndex] + result[bestIndex + 1],
-    );
+    const left = result[bestIndex];
+    const right = result[bestIndex + 1];
+    // Real sentences need a connector when merged; single short fragments
+    // would otherwise run together without any punctuation.
+    const connector = /[。！？!?…；;，,、：:]\s*$/.test(left) ? "" : "，";
+
+    result.splice(bestIndex, 2, left + connector + right);
   }
 
   return result;

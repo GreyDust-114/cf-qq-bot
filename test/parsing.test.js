@@ -182,14 +182,31 @@ test("a single bubble keeps its own final punctuation", () => {
   assert.deepEqual(parsed.messages, ["那就别再开新的了，"]);
 });
 
-test("overflow beyond four bubbles is merged without dropping content", () => {
+test("overflow beyond three bubbles is merged without dropping content", () => {
   const parsed = parseReplyOutput(
     '{"messages":["一甲","二甲","三甲","四甲","五甲","六甲"]}',
   );
 
   assert.equal(parsed.kind, "messages");
-  assert.equal(parsed.messages.length, 4);
-  assert.equal(parsed.messages.join(""), "一甲二甲三甲四甲五甲六甲");
+  assert.equal(parsed.messages.length, 3);
+  assert.equal(
+    parsed.messages.join("").replaceAll("，", ""),
+    "一甲二甲三甲四甲五甲六甲",
+  );
+  assert.equal(parsed.warning, "merged-overflow");
+});
+
+test("merged bubbles are connected with a separator instead of running on", () => {
+  const parsed = parseReplyOutput(
+    '{"messages":["好的呀","没问题呀","知道了呀","再说吧"]}',
+  );
+
+  assert.equal(parsed.kind, "messages");
+  assert.deepEqual(parsed.messages, [
+    "好的呀，没问题呀",
+    "知道了呀",
+    "再说吧",
+  ]);
   assert.equal(parsed.warning, "merged-overflow");
 });
 
@@ -199,7 +216,7 @@ test("parseReplyOutput merges overflow bubbles instead of dropping them", () => 
   );
 
   assert.equal(parsed.kind, "messages");
-  assert.deepEqual(parsed.messages, ["一二", "三", "四", "五"]);
+  assert.deepEqual(parsed.messages, ["一，二", "三，四", "五"]);
   assert.equal(parsed.warning, "merged-overflow");
 });
 
@@ -263,12 +280,12 @@ test("single line breaks also become separate bubbles", () => {
   assert.deepEqual(parsed.messages, ["第一句", "第二句"]);
 });
 
-test("split bubbles still obey the four-bubble overflow merge", () => {
+test("split bubbles still obey the three-bubble overflow merge", () => {
   const parsed = parseReplyOutput(
     '{"messages":["一\\n二","三","四","五"]}',
   );
 
-  assert.deepEqual(parsed.messages, ["一二", "三", "四", "五"]);
+  assert.deepEqual(parsed.messages, ["一，二", "三，四", "五"]);
   assert.equal(parsed.warning, "merged-overflow");
 });
 
