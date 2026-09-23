@@ -50,6 +50,7 @@ npx wrangler d1 migrations apply qq-ai-bot-db --remote
 - `0001_init.sql`：conversations / messages / settings
 - `0002_active_window.sql`：群聊活跃窗口
 - `0003_outbox.sql`：逐气泡可靠发送记录
+- `0004_lore.sql`：角色资料库表（内容由维护者本地的语料同步脚本写入，不随仓库分发；表为空时机器人按无人设资料运行）
 
 ## 变量与机密
 
