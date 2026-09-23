@@ -69,7 +69,7 @@ npm run deploy
 
 公开仓库保留主要源码、D1 migrations、Cloudflare 配置和正式文档。
 
-维护者本地的测试、测试 adapter、工程 Runtime、审查截图、Git hooks、辅助脚本、`.dev.vars` 与含真实环境标识的 `wrangler.toml` 不进入 GitHub 当前文件树；这些文件仍可在维护者工作区中使用。
+维护者本地的测试、测试 adapter、工程 Runtime、审查截图、Git hooks、辅助脚本、`.dev.vars` 与含真实环境标识的 `wrangler.toml` 不进入 GitHub 当前文件树；这些文件仍可在维护者工作区中使用，`npm test`、`npm run verify` 等脚本因此只在维护者工作区可用。
 
 ## 文档
 
