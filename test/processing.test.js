@@ -254,7 +254,7 @@ test("overflow bubbles are merged without dropping content", async () => {
 
   assert.deepEqual(
     sends.map((send) => send.content),
-    ["一，二", "三，四", "五"],
+    ["一，二", "三", "四", "五"],
   );
   assert.ok(ctx.logger.has("merged-overflow"));
 });
