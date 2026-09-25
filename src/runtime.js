@@ -10,6 +10,7 @@ import { Buffer } from "node:buffer";
 import { signValidationResponse, verifyWebhookSignature } from "./crypto.js";
 import { createDependencies } from "./dependencies.js";
 import { HUB_ENQUEUE_PATH } from "./conversation-hub.js";
+import { createMemoryRunner } from "./memory.js";
 import { parseIncomingMessage } from "./pure.js";
 
 function json(data, status = 200) {
@@ -149,5 +150,32 @@ export function createRuntime(env, overrides = {}) {
     return json({ op: 12, d: 0 });
   }
 
-  return { deps, coordinator, processIncomingMessage, handleRequest };
+  // Cron 入口（BOT-017）：把超过保留期的原文压成 digest 与画像。
+  // 失败向上抛，让 Cloudflare 记录为失败；下一次触发会重取同一区间。
+  async function handleScheduled(event = {}) {
+    const runner = createMemoryRunner(deps);
+    const startedAt = deps.now();
+
+    deps.logger.log(
+      `stage=memory start cron=${event.cron ?? "manual"} ` +
+        `scheduled=${event.scheduledTime ?? startedAt}`,
+    );
+
+    try {
+      const result = await runner.runOnce();
+
+      return result;
+    } catch (error) {
+      deps.logger.error("stage=memory failed:", error);
+      throw error;
+    }
+  }
+
+  return {
+    deps,
+    coordinator,
+    processIncomingMessage,
+    handleRequest,
+    handleScheduled,
+  };
 }

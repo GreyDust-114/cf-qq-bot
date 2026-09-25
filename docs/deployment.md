@@ -51,6 +51,7 @@ npx wrangler d1 migrations apply qq-ai-bot-db --remote
 - `0002_active_window.sql`：群聊活跃窗口
 - `0003_outbox.sql`：逐气泡可靠发送记录
 - `0004_lore.sql`：角色资料库表（内容由维护者本地的语料同步脚本写入，不随仓库分发；表为空时机器人按无人设资料运行）
+- `0005_memory.sql`：长期记忆（`messages.member_openid`、`conversations.summarized_until`、`memory_digests`）
 
 ## 变量与机密
 
@@ -62,6 +63,12 @@ npx wrangler secret put LLM_API_KEY
 ```
 
 本地复制 `.dev.vars.example` 为 `.dev.vars`，不要提交真实值。
+
+长期记忆开关（非机密变量，写在本地 `wrangler.toml`）：
+
+- `MEMORY_DRY_RUN`：`"true"`（默认）只报告不删除；试运行 3 天后改为 `"false"` 才开启删除；
+- `MEMORY_RETENTION_DAYS`：原文保留天数（先 `30`，观察一周后收到 `7`）；
+- `[triggers] crons = ["0 20 * * *"]`：北京时间每天 04:00 触发整理（UTC 前一天 20:00）。
 
 ## 部署
 

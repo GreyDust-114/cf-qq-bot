@@ -18,4 +18,16 @@ export default {
   async fetch(request, env, ctx) {
     return getRuntime(env).handleRequest(request, ctx);
   },
+
+  // Cron trigger：长期记忆整理（见 wrangler.toml 的 [triggers]）。
+  // 用 waitUntil 把批次交给运行时，避免请求返回后执行被中断。
+  async scheduled(event, env, ctx) {
+    ctx.waitUntil(
+      getRuntime(env)
+        .handleScheduled(event)
+        .catch((error) => {
+          console.error("stage=memory scheduled failed:", error);
+        }),
+    );
+  },
 };

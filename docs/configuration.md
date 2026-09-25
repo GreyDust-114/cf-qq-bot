@@ -19,6 +19,8 @@
 | `LLM_BASE_URL` | 变量 | 默认 `https://api.deepseek.com` |
 | `LLM_MODEL` | 变量 | 默认 `deepseek-flash` |
 | `ALLOWED_GROUP_OPENID` | 变量 | 灰度群；留空表示不限制 |
+| `MEMORY_DRY_RUN` | 变量 | 长期记忆：`"true"` 只报告不删原文，`"false"` 才实际删除 |
+| `MEMORY_RETENTION_DAYS` | 变量 | 长期记忆：原文保留天数（超过的部分先进摘要、再删除） |
 
 ## 核心参数
 
@@ -45,6 +47,16 @@
 | `LLM_TIMEOUT_MS` | 12000 | 模型调用上限 |
 | `SEND_TIMEOUT_MS` | 8000 | QQ 单次发送上限 |
 | `MAX_IMAGES_PER_MESSAGE` | 4 | 当前消息图片上限 |
+| `MEMORY_RETENTION_MS` | 30 天 | 长期记忆：原文保留期（`MEMORY_RETENTION_DAYS` 可覆盖） |
+| `MEMORY_DRY_RUN_DEFAULT` | true | 长期记忆：默认不删除，只报告 |
+| `MEMORY_MAX_MESSAGES_PER_CHUNK` | 400 | 单次摘要输入的消息条数上限 |
+| `MEMORY_MAX_CHARS_PER_CHUNK` | 40000 | 单次摘要输入的字符上限 |
+| `MEMORY_MAX_CHUNKS_PER_CONVERSATION` | 4 | 每个会话每轮最多压缩几块 |
+| `MEMORY_MAX_CONVERSATIONS_PER_RUN` | 20 | 每轮最多处理几个会话 |
+| `MEMORY_PROFILE_MAX_CHARS` | 1200 | 长期画像长度上限 |
+| `MEMORY_DIGEST_MAX_CHARS` | 1200 | 单段 digest 长度上限 |
+| `MEMORY_DIGESTS_INJECTED` | 7 | 注入回复上下文时携带的最近 digest 段数（P2 接线） |
+| `MEMORY_TIMEOUT_MS` | 20000 | 单次摘要模型调用上限 |
 
 长度参数来自小规模灰度样本，只用于结构护栏，不用于硬性规定句号、`~` 或其他语言风格。
 

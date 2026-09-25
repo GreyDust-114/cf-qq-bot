@@ -39,3 +39,12 @@ LLM_MODEL = "deepseek-flash"
 # Gray-release restriction: only respond in this group openid; empty means
 # no restriction.
 ALLOWED_GROUP_OPENID = ""
+# Long-term memory: while MEMORY_DRY_RUN is not "false" the daily job only
+# reports what it would compact/delete. MEMORY_RETENTION_DAYS is the raw
+# message retention window; digests are written for anything older.
+MEMORY_DRY_RUN = "true"
+MEMORY_RETENTION_DAYS = "30"
+
+# Long-term memory compaction: 04:00 Beijing time (UTC 20:00 the day before).
+[triggers]
+crons = ["0 20 * * *"]

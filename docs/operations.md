@@ -31,6 +31,9 @@ QQ AI Bot is running.
 | `stage=outbox uncertain part=N` | 发送结果不确定，不自动重发 |
 | `stage=llm ok in Xms` | 模型耗时 |
 | `stage=usage request=…` | 每次模型调用的 token 用量：`prompt` / `hit` / `miss` / `out` / `thinking` / `images` / `ms`；`request` 为路由标签（`private` / `mention` / `active` / `autonomous`），视觉回退时带 `+no-images` |
+| `stage=memory conversation=…` | 长期记忆整理的单段结果：`messages` / `from`-`to` / `until`（推进后的水位线）/ `digest` / `profile` 字符数 / `deleted` 条数 / `dry_run` |
+| `stage=memory done …` | 单次整理批次汇总：涉及会话数、块数、消息数、删除数、`failures`、`dry_run`、耗时 |
+| `stage=memory failed` | 单段整理失败（模型或写入）；原文保留，下次重试 |
 | `stage=send ok in Xms` | QQ 发送耗时 |
 
 ## outbox 判定
@@ -53,7 +56,10 @@ QQ AI Bot is running.
 4. `trimmed-total` 持续高频；
 5. `recovering stale batch` 持续出现；
 6. LLM / QQ 发送 P90 明显高于验收基线；
-7. `stage=usage` 的 `miss` 持续接近 `prompt`（前缀缓存失效，通常是消息顺序或前缀内容被改动）。
+7. `stage=usage` 的 `miss` 持续接近 `prompt`（前缀缓存失效，通常是消息顺序或前缀内容被改动）；
+8. `stage=memory failed` 或 `stage=memory done` 的 `failures > 0`：原文已经保留，检查模型可用性与 `memory_digests` 写入；
+9. 连续多天 `stage=memory` 里 `until` 不变而消息持续增长：说明水位线没有推进，检查 `MEMORY_RETENTION_DAYS` 与模型输出是否符合区块协议；
+10. `dry_run=true` 却看到 `deleted` 大于 0 的实际删除：属于配置错误（`MEMORY_DRY_RUN=false` 才是删除开关）。
 
 灰度基线：LLM P90 约 1.9 秒，QQ 发送 P90 约 2.2 秒。详细见 [灰度验收记录](gray-acceptance-2026-09-23.md)。
 

@@ -59,3 +59,21 @@ export const MAX_IMAGE_URL_LENGTH = 8192;
 export const MAX_FACE_EXT_BYTES = 64 * 1024;
 
 export const TOKEN_SETTINGS_KEY = "qq_access_token";
+
+// 长期记忆（BOT-017）：把超过保留期的原文压缩成 digest 与画像，然后删除原文。
+// 保留期分档推进：先 30 天，观察一周后收到 7 天；dry_run 期间只报告不删除。
+export const MEMORY_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
+export const MEMORY_DRY_RUN_DEFAULT = true;
+// 单次模型调用的输入上限，超出的部分留到下一块（保证取到的是最早的连续区间）。
+export const MEMORY_MAX_MESSAGES_PER_CHUNK = 400;
+export const MEMORY_MAX_CHARS_PER_CHUNK = 40000;
+// 每个会话每轮最多压缩几块，防止积压过多时一次 cron 跑飞。
+export const MEMORY_MAX_CHUNKS_PER_CONVERSATION = 4;
+export const MEMORY_MAX_CONVERSATIONS_PER_RUN = 20;
+// 画像与单段 digest 的输出长度上限（字符），注入时同样受这两个值约束。
+export const MEMORY_PROFILE_MAX_CHARS = 1200;
+export const MEMORY_DIGEST_MAX_CHARS = 1200;
+// 注入回复上下文时携带最近几段 digest，更早的细节由画像承担。
+export const MEMORY_DIGESTS_INJECTED = 7;
+export const MEMORY_TIMEOUT_MS = 20 * 1000;
+export const MEMORY_MAX_TOKENS = 1200;

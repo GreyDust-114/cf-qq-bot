@@ -38,6 +38,23 @@ Durable Object: ConversationHub
 8. 每个气泡先写 outbox `pending`，成功后写独立 assistant message 并标记 `sent`。
 9. 失败或结果不确定分别标记为 `failed` / `uncertain`。
 
+## 长期记忆整理（BOT-017，P1）
+
+Cron 触发 `scheduled` 入口（`src/index.js` → `src/runtime.js` → `src/memory.js`），
+与聊天路径完全分离：
+
+1. 选会话：存在 `created_at >= summarized_until` 且 `created_at < now - 保留期` 的消息的会话；
+2. 取区间：按 `created_at, id` 升序取前缀，受条数与字符双上限约束；
+3. 一次模型调用：输入为现有画像 + 带 `[MM-DD HH:MM] [发言人]` 的原文，要求按 `【画像】/【本期】` 两个区块输出；
+4. 写入顺序固定：`memory_digests` → 画像与 `summarized_until` → 删除区间原文；
+   前两步失败就不删，下一次触发重取同一区间（主键 `(conversation_id, period_start)` 保证幂等）；
+5. `MEMORY_DRY_RUN` 不为 `"false"` 时只统计可删条数，不执行删除；
+6. 单个会话失败不阻断其他会话，但整轮会报失败（`failures`），便于告警。
+
+水位线语义：`summarized_until` 表示“小于该时刻的原文都已经进过摘要”。
+取区间用 `>=`、删除用 `<`，两条边界一致，不会出现跳过或重复删除。
+注入回复上下文的记忆块（画像 + 最近若干段 digest，位于静态前缀内）是 P2 的接线范围，尚未启用。
+
 ## Cloudflare Worker 边缘职责
 
 主要文件：`src/runtime.js`、`src/index.js`。
@@ -69,11 +86,11 @@ Worker 不执行长时间模型生成；实际会话处理在 Durable Object ala
 
 ### conversations
 
-会话类型、摘要、自主发言冷却、90 秒活跃聊天窗口和最后被回复的群成员。
+会话类型、摘要（长期画像，由每日整理任务写入）、自主发言冷却、90 秒活跃聊天窗口、最后被回复的群成员，以及长期记忆水位线 `summarized_until`。
 
 ### messages
 
-用户和机器人实际消息。用户消息按 QQ `event_id` 去重；成功发送的每个机器人气泡独立写一行。
+用户和机器人实际消息。用户消息按 QQ `event_id` 去重；群消息另存 `member_openid` 作为说话人身份（昵称可能重复或修改）；成功发送的每个机器人气泡独立写一行。超过保留期且已进过摘要的原文会被删除。
 
 ### lore
 
@@ -82,6 +99,10 @@ Worker 不执行长时间模型生成；实际会话处理在 Durable Object ala
 ### settings
 
 QQ access token 与过期时间。
+
+### memory_digests
+
+按区间保存的整理结果（`0005_memory.sql`）：`conversation_id` + `period_start` 为主键，`period_end`、`kind`、`content`、`message_count`。群聊与私聊严格按 `conversation_id` 隔离；主键同时保证同一区间重复运行不会写出第二份。
 
 ### outbox
 
@@ -105,6 +126,7 @@ QQ access token 与过期时间。
 | `src/coordinator-state.js` | 纯状态迁移与存储恢复 |
 | `src/processor.js` | 上下文、模型调用、路由、outbox 与发送编排 |
 | `src/store.js` | D1 读写 |
+| `src/memory.js` | 长期记忆整理：选会话、取区间、模型调用、写 digest 与画像、推进水位线、删除原文 |
 | `src/llm.js` | DeepSeek 调用与图片回退 |
 | `src/sender.js` | 单气泡 QQ 发送与有限网络重试 |
 | `src/pure.js` | 消息解析、提示词消息构建、正文清理与气泡切分 |

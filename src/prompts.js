@@ -225,6 +225,89 @@ export const PROTOCOL_REMINDER_DECISION =
   '提醒：本轮回复只能是 JSON——要说话输出 {"messages":["第一条","第二条"]}，' +
   '不说话输出 {"silent":true}；不要在 JSON 前后写任何其他字符。';
 
+// ── 长期记忆整理提示词 ────────────────────────────────
+
+// 整理任务与聊天任务分开：这里要求的是可长期复用的要点，不是聊天口气。
+// 长度上限由调用方传入（生产取自 src/config.js），保持本文件无依赖。
+export function memorySystemPrompt({ profileChars, digestChars }) {
+  return [
+    "你在把群聊机器人读到的一段聊天整理成长期记忆，供机器人以后回忆。",
+    "",
+    "只写能站得住的事实与约定：",
+    "- 人物与称呼、关系、身份（保留专有名词与人名原文）",
+    "- 偏好、习惯、值得记住的经历",
+    "- 明确约定与未完成事项（谁要做什么、什么时候）",
+    "- 可能反复出现的玩笑或昵称可以记，但注明是玩笑",
+    "",
+    "不要写：闲聊复述、情绪描写、你对说话人的评价、没有根据的推测。",
+    "不确定的内容宁可不写，也不要猜。",
+    "",
+    "严格按下面两个区块输出，不要写其他内容：",
+    "【画像】",
+    `（合并旧画像与本期新信息后的长期画像，条目式，≤${profileChars} 字）`,
+    "【本期】",
+    `（这一段聊天里值得长期保留的要点，条目式，≤${digestChars} 字）`,
+  ].join("\n");
+}
+
+export function memoryUserPrompt({ profile, transcript, kind }) {
+  const lines = [
+    kind === "c2c" ? "会话类型：与机器人单聊。" : "会话类型：群聊。",
+    "",
+    "现有长期画像（可能为空）：",
+    profile ? profile : "（空）",
+    "",
+    "本期待整理的聊天记录（时间与发言人前缀只用于定位，不要写进结果）：",
+    transcript,
+  ];
+
+  return lines.join("\n");
+}
+
+// 解析整理结果：两个标记都存在时分别取用；缺标记时保守回退——
+// 保留旧画像，把整段输出当作本期要点，避免把模型跑偏的文本写进画像。
+export function parseMemoryOutput(raw, fallbackProfile) {
+  const text = String(raw ?? "").trim();
+
+  if (!text) {
+    return { ok: false, reason: "empty" };
+  }
+
+  const profileIndex = text.indexOf("【画像】");
+  const digestIndex = text.indexOf("【本期】");
+
+  if (profileIndex === -1 && digestIndex === -1) {
+    return {
+      ok: true,
+      profile: fallbackProfile,
+      digest: text,
+      warning: "missing-sections",
+    };
+  }
+
+  // 只出现一个区块（或顺序颠倒）说明模型没按协议输出：不能拿半截文本当画像，
+  // 也不能把画像段落当本期要点，直接判为失败，保留原文等下次重试。
+  if (profileIndex === -1 || digestIndex === -1 || digestIndex < profileIndex) {
+    return { ok: false, reason: "missing-sections" };
+  }
+
+  const profile = text
+    .slice(profileIndex + "【画像】".length, digestIndex)
+    .trim();
+  const digest = text.slice(digestIndex + "【本期】".length).trim();
+
+  if (!digest) {
+    return { ok: false, reason: "no-digest" };
+  }
+
+  return {
+    ok: true,
+    profile: profile || fallbackProfile,
+    digest,
+    warning: null,
+  };
+}
+
 // ── 兜底话术 ──────────────────────────────────────────
 
 export const FALLBACK_ERROR_REPLY = "AI 服务暂时无法响应，请稍后再试。";

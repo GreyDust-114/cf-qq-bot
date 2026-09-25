@@ -30,13 +30,15 @@ export function createStore(deps) {
     const result = await db()
       .prepare(
         `INSERT OR IGNORE INTO messages
-           (conversation_id, event_id, role, sender_name, content, created_at)
-         VALUES (?, ?, 'user', ?, ?, ?)`,
+           (conversation_id, event_id, role, sender_name, member_openid,
+            content, created_at)
+         VALUES (?, ?, 'user', ?, ?, ?, ?)`,
       )
       .bind(
         incoming.conversationId,
         incoming.eventId,
         incoming.senderName ?? null,
+        incoming.memberOpenid ?? null,
         truncateStoredContent(incoming.content),
         deps.now(),
       )
@@ -321,6 +323,151 @@ export function createStore(deps) {
     }
   }
 
+  // ── 长期记忆（BOT-017）─────────────────────────────────
+  //
+  // 摘要任务只通过下面这组函数读写：选会话、取待压缩区间、写字据与画像、
+  // 推进水位线、删除已压缩的原文。删除永远发生在写入成功之后（由
+  // src/memory.js 保证顺序），这里的删除函数本身不做额外判断。
+  async function listConversationsWithBacklog({ before, limit }) {
+    const { results } = await db()
+      .prepare(
+        `SELECT c.conversation_id, c.kind,
+                COALESCE(c.summarized_until, 0) AS summarized_until,
+                MIN(m.created_at) AS oldest_pending,
+                COUNT(*) AS pending_count
+         FROM conversations c
+         JOIN messages m
+           ON m.conversation_id = c.conversation_id
+          AND m.created_at >= COALESCE(c.summarized_until, 0)
+          AND m.created_at < ?
+         GROUP BY c.conversation_id, c.kind, c.summarized_until
+         ORDER BY oldest_pending
+         LIMIT ?`,
+      )
+      .bind(before, limit)
+      .all();
+
+    return results ?? [];
+  }
+
+  async function loadMemoryState(conversationId) {
+    const row = await db()
+      .prepare(
+        `SELECT summary, summarized_until
+         FROM conversations
+         WHERE conversation_id = ?`,
+      )
+      .bind(conversationId)
+      .first();
+
+    return {
+      profile: row?.summary ?? "",
+      summarizedUntil: Number(row?.summarized_until ?? 0),
+    };
+  }
+
+  // 取最早的一段待压缩原文（升序前缀），字符上限在 JS 侧按条累加，
+  // 保证截断点一定落在「已取条目的最后一条」之后，水位线不会跳过内容。
+  async function loadMemoryBacklog(
+    conversationId,
+    { from, to, maxMessages, maxChars },
+  ) {
+    const { results } = await db()
+      .prepare(
+        `SELECT id, role, sender_name, member_openid, content, created_at
+         FROM messages
+         WHERE conversation_id = ? AND created_at >= ? AND created_at < ?
+         ORDER BY created_at, id
+         LIMIT ?`,
+      )
+      .bind(conversationId, from, to, maxMessages)
+      .all();
+
+    const rows = results ?? [];
+    const kept = [];
+    let totalChars = 0;
+
+    for (const row of rows) {
+      const nextTotal = totalChars + row.content.length;
+
+      if (nextTotal > maxChars && kept.length > 0) {
+        break;
+      }
+
+      totalChars = nextTotal;
+      kept.push(row);
+    }
+
+    return kept;
+  }
+
+  async function saveMemoryDigest(entry) {
+    await db()
+      .prepare(
+        `INSERT INTO memory_digests
+           (conversation_id, period_start, period_end, kind, content,
+            message_count, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(conversation_id, period_start)
+         DO UPDATE SET period_end = excluded.period_end,
+                       content = excluded.content,
+                       message_count = excluded.message_count`,
+      )
+      .bind(
+        entry.conversationId,
+        entry.periodStart,
+        entry.periodEnd,
+        entry.kind ?? "daily",
+        entry.content,
+        entry.messageCount ?? 0,
+        deps.now(),
+      )
+      .run();
+  }
+
+  async function commitMemoryProgress({
+    conversationId,
+    profile,
+    summarizedUntil,
+  }) {
+    const now = deps.now();
+
+    await db()
+      .prepare(
+        `UPDATE conversations
+         SET summary = ?, summary_updated_at = ?, summarized_until = ?,
+             updated_at = ?
+         WHERE conversation_id = ?`,
+      )
+      .bind(profile, now, summarizedUntil, now, conversationId)
+      .run();
+  }
+
+  async function countMessagesBefore(conversationId, until) {
+    const row = await db()
+      .prepare(
+        `SELECT COUNT(*) AS n
+         FROM messages
+         WHERE conversation_id = ? AND created_at < ?`,
+      )
+      .bind(conversationId, until)
+      .first();
+
+    return Number(row?.n ?? 0);
+  }
+
+  async function deleteMessagesBefore(conversationId, until) {
+    const result = await db()
+      .prepare(
+        `DELETE FROM messages
+         WHERE conversation_id = ? AND created_at < ?`,
+      )
+      .bind(conversationId, until)
+      .run();
+
+    return Number(result.meta?.changes ?? 0);
+  }
+
   return {
     ensureConversation,
     storeIncomingMessage,
@@ -336,5 +483,12 @@ export function createStore(deps) {
     markOutboxSent,
     markOutboxAssistant,
     markOutboxFailure,
+    listConversationsWithBacklog,
+    loadMemoryState,
+    loadMemoryBacklog,
+    saveMemoryDigest,
+    commitMemoryProgress,
+    countMessagesBefore,
+    deleteMessagesBefore,
   };
 }
