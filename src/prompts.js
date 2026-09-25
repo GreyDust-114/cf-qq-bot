@@ -225,6 +225,25 @@ export const PROTOCOL_REMINDER_DECISION =
   '提醒：本轮回复只能是 JSON——要说话输出 {"messages":["第一条","第二条"]}，' +
   '不说话输出 {"silent":true}；不要在 JSON 前后写任何其他字符。';
 
+// 近期 digest 注入：与长期画像（conversations.summary）一起放在静态前缀里，
+// 位置在资料库之后、协议提醒之前；内容一天只变一次，不打断前缀缓存。
+// 传入的每一行已由调用方渲染好时间前缀。
+export function recentMemoryPrompt(lines) {
+  const body = (lines ?? []).filter(Boolean).join("\n");
+
+  if (!body) {
+    return null;
+  }
+
+  return [
+    "【近期记忆】",
+    "更早的对话要点（按时间）：",
+    body,
+    "",
+    "只用于理解背景与称呼；不要主动复述，也不要提“记忆/摘要”字样。",
+  ].join("\n");
+}
+
 // ── 长期记忆整理提示词 ────────────────────────────────
 
 // 整理任务与聊天任务分开：这里要求的是可长期复用的要点，不是聊天口气。

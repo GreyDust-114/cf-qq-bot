@@ -53,7 +53,23 @@ Cron 触发 `scheduled` 入口（`src/index.js` → `src/runtime.js` → `src/me
 
 水位线语义：`summarized_until` 表示“小于该时刻的原文都已经进过摘要”。
 取区间用 `>=`、删除用 `<`，两条边界一致，不会出现跳过或重复删除。
-注入回复上下文的记忆块（画像 + 最近若干段 digest，位于静态前缀内）是 P2 的接线范围，尚未启用。
+
+删除还有第二道保险：`deleteMessagesBefore` 除水位线外再要求“消息落在某段
+`memory_digests` 区间内”，即使水位线被误推进，也不会删掉没有摘要覆盖的消息。
+
+### 记忆注入（回复路径）
+
+回复上下文的消息顺序：
+
+```
+系统提示（人设/规则）→ 资料库 → 长期画像 → 近期 digest → 输出协议
+  → 历史消息 → 分钟级时间上下文（最后）
+```
+
+画像来自 `conversations.summary`，近期 digest 取 `memory_digests` 中最近的
+`MEMORY_DIGESTS_INJECTED` 段（按时间升序、带 `[MM-DD]` 前缀）。
+整个记忆块位于静态前缀内、且一天只变一次，因此不会破坏前缀缓存；
+`memory_digests` 表缺失或为空时按无记忆运行。
 
 ## Cloudflare Worker 边缘职责
 

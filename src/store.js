@@ -4,6 +4,7 @@ import {
   CONTEXT_MAX_CHARS,
   CONTEXT_MAX_MESSAGES,
   CONTEXT_WINDOW_MS,
+  MEMORY_DIGESTS_INJECTED,
 } from "./config.js";
 
 import { randomBetween, truncateStoredContent } from "./pure.js";
@@ -96,8 +97,33 @@ export function createStore(deps) {
 
     return {
       summary: summaryRow?.summary ?? "",
+      digests: await loadRecentDigests(
+        conversationId,
+        MEMORY_DIGESTS_INJECTED,
+      ),
       messages: kept,
     };
+  }
+
+  // 近期 digest：失败（例如迁移未应用）时按无记忆运行，不阻断回复。
+  async function loadRecentDigests(conversationId, limit) {
+    try {
+      const { results } = await db()
+        .prepare(
+          `SELECT period_start, period_end, content
+           FROM memory_digests
+           WHERE conversation_id = ?
+           ORDER BY period_end DESC, period_start DESC
+           LIMIT ?`,
+        )
+        .bind(conversationId, limit)
+        .all();
+
+      return (results ?? []).slice().reverse();
+    } catch (error) {
+      deps.logger.error("memory digests read failed:", error);
+      return [];
+    }
   }
 
   // Character lore: written by the local corpus sync script and read on every
@@ -456,11 +482,19 @@ export function createStore(deps) {
     return Number(row?.n ?? 0);
   }
 
+  // 删除已压缩的原文。除了水位线，这里再要求「落在某段 digest 区间内」，
+  // 作为第二道保险：即使水位线被误推进，也不会删掉没有摘要覆盖的消息。
   async function deleteMessagesBefore(conversationId, until) {
     const result = await db()
       .prepare(
         `DELETE FROM messages
-         WHERE conversation_id = ? AND created_at < ?`,
+         WHERE conversation_id = ? AND created_at < ?
+           AND EXISTS (
+             SELECT 1 FROM memory_digests d
+              WHERE d.conversation_id = messages.conversation_id
+                AND d.period_start <= messages.created_at
+                AND messages.created_at <= d.period_end
+           )`,
       )
       .bind(conversationId, until)
       .run();
@@ -472,6 +506,7 @@ export function createStore(deps) {
     ensureConversation,
     storeIncomingMessage,
     loadConversationContext,
+    loadRecentDigests,
     loadLore,
     storeAssistantMessage,
     getNextAutonomousAt,

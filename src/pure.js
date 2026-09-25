@@ -26,6 +26,7 @@ import {
   groupSummaryPrompt,
   loreMessage,
   privateSummaryPrompt,
+  recentMemoryPrompt,
   PROTOCOL_REMINDER_DECISION,
   PROTOCOL_REMINDER_REPLY,
   timeContextPrompt,
@@ -696,6 +697,18 @@ export function buildPrivateMessages(context, incoming, options = {}) {
     });
   }
 
+  const memory = recentMemoryPrompt(
+    (context.digests ?? []).map(
+      (digest) =>
+        `[${formatMessageTime(digest.period_end).slice(0, 5)}] ` +
+        `${digest.content}`,
+    ),
+  );
+
+  if (memory) {
+    messages.push({ role: "system", content: memory });
+  }
+
   messages.push({ role: "system", content: PROTOCOL_REMINDER_REPLY });
 
   const history = mergeConsecutiveUserMessages(context.messages);
@@ -768,6 +781,18 @@ export function buildGroupMessages(context, incoming, options = {}) {
       role: "system",
       content: groupSummaryPrompt(context.summary),
     });
+  }
+
+  const memory = recentMemoryPrompt(
+    (context.digests ?? []).map(
+      (digest) =>
+        `[${formatMessageTime(digest.period_end).slice(0, 5)}] ` +
+        `${digest.content}`,
+    ),
+  );
+
+  if (memory) {
+    messages.push({ role: "system", content: memory });
   }
 
   messages.push({

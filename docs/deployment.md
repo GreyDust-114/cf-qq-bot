@@ -70,6 +70,15 @@ npx wrangler secret put LLM_API_KEY
 - `MEMORY_RETENTION_DAYS`：原文保留天数（先 `30`，观察一周后收到 `7`）；
 - `[triggers] crons = ["0 20 * * *"]`：北京时间每天 04:00 触发整理（UTC 前一天 20:00）。
 
+长期记忆开闸顺序（先 dry_run、再 30 天保留、最后 7 天）：
+
+1. 先应用远程 migration 0005，再部署带 crons 的版本（顺序不能颠倒：新代码读 `memory_digests` 失败时按无记忆降级，但迁移未应用时表不存在）；
+2. `MEMORY_DRY_RUN="true"` 跑满 3 天，每天检查 `stage=memory done` 的 `deleted` 与 `failures=0`，并抽查 digest 内容是否只保留事实与约定；
+3. 3 天无异常后改为 `MEMORY_DRY_RUN="false"`，保留期保持 30 天；删除后确认被删区间仍能从画像/digest 回答（问一个几天前的事）；
+4. 观察一周无记忆丢失后，把 `MEMORY_RETENTION_DAYS` 收到 `7`（再做一次同样的核对）。
+
+每次调整都要留三组证据：删除条数与水位线、被删区间的可答性、`stage=usage` 的命中率与长度分布。
+
 ## 部署
 
 ```powershell
