@@ -79,6 +79,7 @@ npm run deploy
 - [聊天行为与提示词协议](docs/behavior.md)
 - [运维、日志与排错](docs/operations.md)
 - [生产灰度验收记录（2026-09-23）](docs/gray-acceptance-2026-09-23.md)
+- [生产灰度验收记录（2026-09-25）](docs/gray-acceptance-2026-09-25.md)
 
 ## AI 辅助开发与参考项目
 

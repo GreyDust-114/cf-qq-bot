@@ -19,6 +19,7 @@ Durable Object: ConversationHub
    └─ D1
        ├─ conversations
        ├─ messages
+       ├─ lore
        ├─ settings
        └─ outbox
 ```
@@ -73,6 +74,10 @@ Worker 不执行长时间模型生成；实际会话处理在 Durable Object ala
 ### messages
 
 用户和机器人实际消息。用户消息按 QQ `event_id` 去重；成功发送的每个机器人气泡独立写一行。
+
+### lore
+
+角色资料库（`0004_lore.sql`）：`title`、`content`、`sort_order`。内容由维护者本地的语料同步脚本写入，语料本身不进入公开仓库。每批处理时读取一次，作为独立 system 消息插在摘要之后、历史之前；表为空或迁移未应用时按「无资料」运行。
 
 ### settings
 
