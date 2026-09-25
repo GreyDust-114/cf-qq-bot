@@ -675,26 +675,25 @@ export function buildImageParts(imageUrls) {
   }));
 }
 
+// 消息顺序是缓存键的一部分：静态块（人设 → 资料库 → 摘要 → 协议提醒）排在
+// 历史之前，分钟级的时间上下文放在最后。DeepSeek 前缀缓存只认完全一致的前缀，
+// 如果把动态时间插在静态块之前，资料库与历史每次调用都会按未命中计费。
 export function buildPrivateMessages(context, incoming, options = {}) {
   const messages = [
     { role: "system", content: PRIVATE_SYSTEM_PROMPT },
-    {
-      role: "system",
-      content: timeContextPrompt(formatNowForPrompt(options.now)),
-    },
   ];
+
+  const lore = loreMessage(context.lore);
+
+  if (lore) {
+    messages.push({ role: "system", content: lore });
+  }
 
   if (context.summary) {
     messages.push({
       role: "system",
       content: privateSummaryPrompt(context.summary),
     });
-  }
-
-  const lore = loreMessage(context.lore);
-
-  if (lore) {
-    messages.push({ role: "system", content: lore });
   }
 
   messages.push({ role: "system", content: PROTOCOL_REMINDER_REPLY });
@@ -735,9 +734,15 @@ export function buildPrivateMessages(context, incoming, options = {}) {
     });
   }
 
+  messages.push({
+    role: "system",
+    content: timeContextPrompt(formatNowForPrompt(options.now)),
+  });
+
   return messages;
 }
 
+// 与私聊路径相同：静态块在前、历史居中、时间上下文置末，保证前缀缓存可用。
 export function buildGroupMessages(context, incoming, options = {}) {
   const decision = options.decision === true;
 
@@ -750,23 +755,19 @@ export function buildGroupMessages(context, incoming, options = {}) {
           ? GROUP_CONTINUATION_SYSTEM_PROMPT
           : GROUP_MENTION_SYSTEM_PROMPT,
     },
-    {
-      role: "system",
-      content: timeContextPrompt(formatNowForPrompt(options.now)),
-    },
   ];
+
+  const lore = loreMessage(context.lore);
+
+  if (lore) {
+    messages.push({ role: "system", content: lore });
+  }
 
   if (context.summary) {
     messages.push({
       role: "system",
       content: groupSummaryPrompt(context.summary),
     });
-  }
-
-  const lore = loreMessage(context.lore);
-
-  if (lore) {
-    messages.push({ role: "system", content: lore });
   }
 
   messages.push({
@@ -826,6 +827,11 @@ export function buildGroupMessages(context, incoming, options = {}) {
         (incoming.content || "【图片】"),
     });
   }
+
+  messages.push({
+    role: "system",
+    content: timeContextPrompt(formatNowForPrompt(options.now)),
+  });
 
   return messages;
 }

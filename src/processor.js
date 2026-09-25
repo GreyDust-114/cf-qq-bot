@@ -313,7 +313,11 @@ export function createProcessor(env, overrides = {}) {
             includeImages,
             now: deps.now(),
           }),
-        { maxTokens: 2000 },
+        {
+          maxTokens: 2000,
+          label: "private",
+          imageCount: trigger.imageUrls.length,
+        },
         hasImages,
         deadline,
       );
@@ -361,7 +365,11 @@ export function createProcessor(env, overrides = {}) {
             includeImages,
             now: deps.now(),
           }),
-        { maxTokens: 2000 },
+        {
+          maxTokens: 2000,
+          label: continuation ? "active" : "mention",
+          imageCount: trigger.imageUrls.length,
+        },
         hasImages,
         deadline,
       );
@@ -414,7 +422,11 @@ export function createProcessor(env, overrides = {}) {
             includeImages,
             now: deps.now(),
           }),
-        { maxTokens: 1500 },
+        {
+          maxTokens: 1500,
+          label: "autonomous",
+          imageCount: trigger.imageUrls.length,
+        },
         hasImages,
         deadline,
       );

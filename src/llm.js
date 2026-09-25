@@ -58,6 +58,22 @@ export function createLlmClient(deps) {
       );
     }
 
+    // 每次调用记一行用量，包含缓存命中/未命中拆分，便于核对费用与排查回归。
+    const usage = data.usage ?? {};
+
+    deps.logger.log(
+      `stage=usage request=${options.label ?? "unknown"} ` +
+        `prompt=${usage.prompt_tokens ?? "?"} ` +
+        `hit=${usage.prompt_cache_hit_tokens ?? "?"} ` +
+        `miss=${usage.prompt_cache_miss_tokens ?? "?"} ` +
+        `out=${usage.completion_tokens ?? "?"} ` +
+        `thinking=${
+          usage.completion_tokens_details?.reasoning_tokens ?? "?"
+        } ` +
+        `images=${options.imageCount ?? 0} ` +
+        `ms=${elapsedMs}`,
+    );
+
     deps.logger.log(`stage=llm ok in ${elapsedMs}ms`);
     return reply;
   }
@@ -81,6 +97,10 @@ export function createLlmClient(deps) {
       return callDeepSeek(buildMessages(includeImages), {
         ...options,
         timeoutMs: timeout,
+        imageCount: includeImages ? (options.imageCount ?? 0) : 0,
+        label: includeImages
+          ? (options.label ?? "unknown")
+          : `${options.label ?? "unknown"}+no-images`,
       });
     };
 

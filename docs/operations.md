@@ -30,6 +30,7 @@ QQ AI Bot is running.
 | `stage=outbox failed part=N` | 确定性失败 |
 | `stage=outbox uncertain part=N` | 发送结果不确定，不自动重发 |
 | `stage=llm ok in Xms` | 模型耗时 |
+| `stage=usage request=…` | 每次模型调用的 token 用量：`prompt` / `hit` / `miss` / `out` / `thinking` / `images` / `ms`；`request` 为路由标签（`private` / `mention` / `active` / `autonomous`），视觉回退时带 `+no-images` |
 | `stage=send ok in Xms` | QQ 发送耗时 |
 
 ## outbox 判定
@@ -51,7 +52,8 @@ QQ AI Bot is running.
 3. 时间前缀、气泡内换行或悬空分隔标点回归；
 4. `trimmed-total` 持续高频；
 5. `recovering stale batch` 持续出现；
-6. LLM / QQ 发送 P90 明显高于验收基线。
+6. LLM / QQ 发送 P90 明显高于验收基线；
+7. `stage=usage` 的 `miss` 持续接近 `prompt`（前缀缓存失效，通常是消息顺序或前缀内容被改动）。
 
 灰度基线：LLM P90 约 1.9 秒，QQ 发送 P90 约 2.2 秒。详细见 [灰度验收记录](gray-acceptance-2026-09-23.md)。
 
