@@ -5,13 +5,15 @@
 //
 // 水位线语义（见 db/migrations/0005_memory.sql）：
 //   summarized_until 表示「小于该时刻的原文都已经进过摘要」，
-//   取区间用 `created_at >= summarized_until` 且 `created_at < cutoff`，
-//   删除用 `created_at < summarized_until`，两条边界严格一致，不留缝隙。
+//   取区间用 `created_at >= summarized_until` 且 `created_at < 压缩期边界`，
+//   删除用 `created_at < min(summarized_until, 保留期边界)`，
+//   两条边界严格一致，不留缝隙；压缩期短于保留期时不会提前删掉原文。
 //
 // dry_run（默认开）只写入报告与日志，不删除原文；用户确认后再把
 // MEMORY_DRY_RUN 置为 "false" 开启删除。
 
 import {
+  MEMORY_COMPACT_AFTER_MS,
   MEMORY_DIGEST_MAX_CHARS,
   MEMORY_DRY_RUN_DEFAULT,
   MEMORY_MAX_CHARS_PER_CHUNK,
@@ -86,9 +88,19 @@ export function createMemoryRunner(deps) {
     return options.retentionMs ?? MEMORY_RETENTION_MS;
   }
 
+  function compactAfterMs(options) {
+    const days = Number(deps.env.MEMORY_COMPACT_AFTER_DAYS);
+
+    if (Number.isFinite(days) && days >= 0) {
+      return days * 24 * 60 * 60 * 1000;
+    }
+
+    return options.compactAfterMs ?? MEMORY_COMPACT_AFTER_MS;
+  }
+
   // 压缩一个会话的一段区间；返回 null 表示没有需要处理的内容。
   async function compactChunk(conversation, context) {
-    const { cutoff, dryRun, deadline } = context;
+    const { cutoff, deleteCutoff, dryRun, deadline } = context;
     const { conversationId, kind } = conversation;
 
     const state = await store.loadMemoryState(conversationId);
@@ -190,17 +202,13 @@ export function createMemoryRunner(deps) {
     });
 
     let deleted = 0;
+    // 删除还要再等保留期：水质线可能在压缩期内（保留期更长时）。
+    const deleteBefore = Math.min(summarizedUntil, deleteCutoff);
 
     if (!dryRun) {
-      deleted = await store.deleteMessagesBefore(
-        conversationId,
-        summarizedUntil,
-      );
+      deleted = await store.deleteMessagesBefore(conversationId, deleteBefore);
     } else {
-      deleted = await store.countMessagesBefore(
-        conversationId,
-        summarizedUntil,
-      );
+      deleted = await store.countMessagesBefore(conversationId, deleteBefore);
     }
 
     deps.logger.log(
@@ -209,6 +217,7 @@ export function createMemoryRunner(deps) {
         `from=${new Date(periodStart).toISOString()} ` +
         `to=${new Date(periodEnd).toISOString()} ` +
         `until=${new Date(summarizedUntil).toISOString()} ` +
+        `delete_before=${new Date(deleteBefore).toISOString()} ` +
         `digest=${digest.length} profile=${profile.length} ` +
         `deleted=${deleted} dry_run=${dryRun}` +
         (parsed.warning ? ` warning=${parsed.warning}` : ""),
@@ -274,7 +283,8 @@ export function createMemoryRunner(deps) {
 
   async function runOnce(options = {}) {
     const dryRun = isDryRun(options);
-    const cutoff = deps.now() - retentionMs(options);
+    const cutoff = deps.now() - compactAfterMs(options);
+    const deleteCutoff = deps.now() - retentionMs(options);
     const startedAt = deps.now();
     const deadline = startedAt + (options.budgetMs ?? 60 * 1000);
 
@@ -292,7 +302,7 @@ export function createMemoryRunner(deps) {
           conversationId: conversation.conversation_id,
           kind: conversation.kind,
         },
-        { cutoff, dryRun, deadline },
+        { cutoff, deleteCutoff, dryRun, deadline },
       );
 
       failures += chunks.filter((chunk) => chunk.status === "error").length;
@@ -308,6 +318,7 @@ export function createMemoryRunner(deps) {
     const summary = {
       dryRun,
       cutoff,
+      deleteCutoff,
       conversations: results.length,
       chunks: results.reduce((sum, item) => sum + item.chunks.length, 0),
       messages: results.reduce(

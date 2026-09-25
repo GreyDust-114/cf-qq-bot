@@ -60,8 +60,14 @@ export const MAX_FACE_EXT_BYTES = 64 * 1024;
 
 export const TOKEN_SETTINGS_KEY = "qq_access_token";
 
-// 长期记忆（BOT-017）：把超过保留期的原文压缩成 digest 与画像，然后删除原文。
-// 保留期分档推进：先 30 天，观察一周后收到 7 天；dry_run 期间只报告不删除。
+// 长期记忆（BOT-017）：把超过压缩期的原文压成 digest 与画像；删除只发生在
+// 超过保留期（且已被 digest 覆盖）的区间上。两个阈值分开：
+// - 压缩期（MEMORY_COMPACT_AFTER_MS）：多久之后值得总结。太晚压缩会漏掉读窗口
+//   之外的内容（读窗口只有 24 小时），所以默认 2 天；
+// - 保留期（MEMORY_RETENTION_MS）：多久之后可以删原文。分档推进：先 30 天，
+//   观察一周后收到 7 天。
+// dry_run 期间照常写 digest 与画像，只不删除。
+export const MEMORY_COMPACT_AFTER_MS = 2 * 24 * 60 * 60 * 1000;
 export const MEMORY_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 export const MEMORY_DRY_RUN_DEFAULT = true;
 // 单次模型调用的输入上限，超出的部分留到下一块（保证取到的是最早的连续区间）。

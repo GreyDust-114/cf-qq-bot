@@ -4,8 +4,9 @@
 -- 内容由 Worker 的每日摘要任务（scheduled）写入。
 --
 -- summarized_until 的语义是「小于该时刻的原文都已经进过摘要」：
--- 摘要任务按 `created_at >= summarized_until AND created_at < now - 保留期`
--- 取区间，写完 digest 与画像后才推进水位线并删除该区间原文。
+-- 摘要任务按 `created_at >= summarized_until AND created_at < now - 压缩期`
+-- 取区间，写完 digest 与画像后才推进水位线；删除另外受保留期约束
+-- （`created_at < min(summarized_until, now - 保留期)`），且必须被某段 digest 覆盖。
 
 ALTER TABLE messages ADD COLUMN member_openid TEXT;
 

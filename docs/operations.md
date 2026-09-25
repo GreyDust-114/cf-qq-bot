@@ -31,7 +31,7 @@ QQ AI Bot is running.
 | `stage=outbox uncertain part=N` | 发送结果不确定，不自动重发 |
 | `stage=llm ok in Xms` | 模型耗时 |
 | `stage=usage request=…` | 每次模型调用的 token 用量：`prompt` / `hit` / `miss` / `out` / `thinking` / `images` / `ms`；`request` 为路由标签（`private` / `mention` / `active` / `autonomous`），视觉回退时带 `+no-images` |
-| `stage=memory conversation=…` | 长期记忆整理的单段结果：`messages` / `from`-`to` / `until`（推进后的水位线）/ `digest` / `profile` 字符数 / `deleted` 条数 / `dry_run` |
+| `stage=memory conversation=…` | 长期记忆整理的单段结果：`messages` / `from`-`to` / `until`（推进后的水位线）/ `delete_before`（实际可删边界，受保留期约束）/ `digest` / `profile` 字符数 / `deleted` 条数 / `dry_run` |
 | `stage=memory done …` | 单次整理批次汇总：涉及会话数、块数、消息数、删除数、`failures`、`dry_run`、耗时 |
 | `stage=memory failed` | 单段整理失败（模型或写入）；原文保留，下次重试 |
 | `stage=send ok in Xms` | QQ 发送耗时 |

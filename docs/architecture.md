@@ -43,7 +43,7 @@ Durable Object: ConversationHub
 Cron 触发 `scheduled` 入口（`src/index.js` → `src/runtime.js` → `src/memory.js`），
 与聊天路径完全分离：
 
-1. 选会话：存在 `created_at >= summarized_until` 且 `created_at < now - 保留期` 的消息的会话；
+1. 选会话：存在 `created_at >= summarized_until` 且 `created_at < now - 压缩期` 的消息的会话；
 2. 取区间：按 `created_at, id` 升序取前缀，受条数与字符双上限约束；
 3. 一次模型调用：输入为现有画像 + 带 `[MM-DD HH:MM] [发言人]` 的原文，要求按 `【画像】/【本期】` 两个区块输出；
 4. 写入顺序固定：`memory_digests` → 画像与 `summarized_until` → 删除区间原文；
@@ -53,6 +53,9 @@ Cron 触发 `scheduled` 入口（`src/index.js` → `src/runtime.js` → `src/me
 
 水位线语义：`summarized_until` 表示“小于该时刻的原文都已经进过摘要”。
 取区间用 `>=`、删除用 `<`，两条边界一致，不会出现跳过或重复删除。
+**压缩期与保留期是两个独立阈值**：压缩默认从 2 天开始（读窗口只有 24 小时，
+太晚压缩会漏掉窗口之外的聊天），删除则等到保留期（先 30 天、后 7 天）。
+压缩期短于保留期时，digest 已经写好但原文仍在，不会提前删除。
 
 删除还有第二道保险：`deleteMessagesBefore` 除水位线外再要求“消息落在某段
 `memory_digests` 区间内”，即使水位线被误推进，也不会删掉没有摘要覆盖的消息。

@@ -44,6 +44,9 @@ ALLOWED_GROUP_OPENID = ""
 # message retention window; digests are written for anything older.
 MEMORY_DRY_RUN = "true"
 MEMORY_RETENTION_DAYS = "30"
+# Messages older than this many days are compacted into digests; raw rows are
+# only deleted once they are older than MEMORY_RETENTION_DAYS.
+MEMORY_COMPACT_AFTER_DAYS = "2"
 
 # Long-term memory compaction: 04:00 Beijing time (UTC 20:00 the day before).
 [triggers]
