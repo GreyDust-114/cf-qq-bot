@@ -147,6 +147,9 @@ export function createMemoryRunner(deps) {
         maxTokens: MEMORY_MAX_TOKENS,
         label: "memory",
         timeoutMs: MEMORY_TIMEOUT_MS,
+        // 抽取任务不需要思考链：思考 token 与正文共享 max_tokens，
+        // 复杂输入会把预算吃满并返回空正文（BOT-017 修复轮次 1）。
+        thinking: false,
       },
       false,
       deadline,

@@ -13,11 +13,17 @@ export function createLlmClient(deps) {
       deps.env.LLM_BASE_URL ?? DEFAULT_LLM_BASE_URL,
     ).replace(/\/+$/, "");
 
+    // 思考默认开启（聊天路径依赖它）；记忆整理这类抽取任务传
+    // { thinking: false } 关掉：思考 token 与正文共享 max_tokens，
+    // 复杂输入会把预算吃满并返回空正文（2026-09-25 首次 cron 实例）。
+    const thinking = options.thinking !== false;
+
     const body = {
       model: deps.env.LLM_MODEL,
       messages,
-      thinking: { type: "enabled" },
-      reasoning_effort: "low",
+      ...(thinking
+        ? { thinking: { type: "enabled" }, reasoning_effort: "low" }
+        : { thinking: { type: "disabled" } }),
       // NOTE: response_format: json_object was tried and reverted. With
       // thinking enabled the API returned JSON shapes that parsed to empty
       // messages (mention replies fell back to the safe reply, autonomous
@@ -50,17 +56,12 @@ export function createLlmClient(deps) {
     }
 
     const data = JSON.parse(responseBody);
+    const usage = data.usage ?? {};
+    const finishReason = data.choices?.[0]?.finish_reason ?? "unknown";
     const reply = data.choices?.[0]?.message?.content;
 
-    if (!reply) {
-      throw new Error(
-        `DeepSeek returned an empty response (${elapsedMs}ms)`,
-      );
-    }
-
-    // 每次调用记一行用量，包含缓存命中/未命中拆分，便于核对费用与排查回归。
-    const usage = data.usage ?? {};
-
+    // 每次调用记一行用量（含缓存命中/未命中拆分），空正文也要先记一行，
+    // 这样失败调用同样能对账，并留下 finish_reason 供排错。
     deps.logger.log(
       `stage=usage request=${options.label ?? "unknown"} ` +
         `prompt=${usage.prompt_tokens ?? "?"} ` +
@@ -71,8 +72,19 @@ export function createLlmClient(deps) {
           usage.completion_tokens_details?.reasoning_tokens ?? "?"
         } ` +
         `images=${options.imageCount ?? 0} ` +
+        `finish=${finishReason} ` +
         `ms=${elapsedMs}`,
     );
+
+    if (!reply) {
+      throw new Error(
+        `DeepSeek returned an empty response (${elapsedMs}ms, ` +
+          `finish=${finishReason}, out=${usage.completion_tokens ?? "?"}, ` +
+          `thinking=${
+            usage.completion_tokens_details?.reasoning_tokens ?? "?"
+          })`,
+      );
+    }
 
     deps.logger.log(`stage=llm ok in ${elapsedMs}ms`);
     return reply;

@@ -82,4 +82,4 @@ export const MEMORY_DIGEST_MAX_CHARS = 1200;
 // 注入回复上下文时携带最近几段 digest，更早的细节由画像承担。
 export const MEMORY_DIGESTS_INJECTED = 7;
 export const MEMORY_TIMEOUT_MS = 20 * 1000;
-export const MEMORY_MAX_TOKENS = 1200;
+export const MEMORY_MAX_TOKENS = 2000;
