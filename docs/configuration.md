@@ -29,9 +29,9 @@
 
 | 参数 | 当前值 | 作用 |
 |---|---:|---|
-| `CONTEXT_WINDOW_MS` | 24 小时 | 上下文时间窗口 |
-| `CONTEXT_MAX_MESSAGES` | 100 | 上下文消息条数上限 |
-| `CONTEXT_MAX_CHARS` | 60000 | 上下文字符上限 |
+| `CONTEXT_WINDOW_MS` | 72 小时 | 上下文时间窗口（窗口外的旧内容由 digest 承担） |
+| `CONTEXT_MAX_MESSAGES` | 400 | 上下文消息条数上限（按灰度群频率约等于 2 天活跃内容） |
+| `CONTEXT_MAX_CHARS` | 60000 | 上下文字符上限（超出时从最旧一端裁剪） |
 | `MAX_REPLY_PARTS` | 4 | 解析层气泡硬上限（提示词通常 1 条、最多 3 条） |
 | `BUBBLE_TARGET_MAX_CHARS` | 12 | 单条气泡目标长度 |
 | `MAX_REPLY_TOTAL_CHARS` | 40 | 单次回复硬字数预算（提示词软引导 20 字、被问设定时 30 字） |

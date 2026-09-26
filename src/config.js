@@ -4,8 +4,14 @@
 export const QQ_TOKEN_URL = "https://bots.qq.com/app/getAppAccessToken";
 export const QQ_API_BASE_URL = "https://api.sgroup.qq.com";
 
-export const CONTEXT_WINDOW_MS = 24 * 60 * 60 * 1000;
-export const CONTEXT_MAX_MESSAGES = 100;
+// 上下文读窗口（BOT-017 P4）。原文窗口与摘要的压缩期（默认 2 天）共同覆盖
+// 全部历史：窗口内看原文，压缩期外看 digest。窗口给到 72 小时（安静时会话
+// 可以真的回忆三天前），但条数/字符上限护栏住提示词体积。
+export const CONTEXT_WINDOW_MS = 72 * 60 * 60 * 1000;
+// 条数上限按灰度群的说话频率估算：约 15.5 字符/条、每小时十几条，400 条
+// 约等于 2 天活跃内容（≈1 万字符 / 5～8K tokens），超出的旧内容由 digest
+// 承担，避免把整个窗口塞进提示词。
+export const CONTEXT_MAX_MESSAGES = 400;
 export const CONTEXT_MAX_CHARS = 60000;
 export const STORED_CONTENT_MAX_CHARS = 2000;
 export const MAX_REPLY_CHARS = 1800;
