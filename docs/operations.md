@@ -24,6 +24,7 @@ QQ AI Bot is running.
 | `Route: active/mention/autonomous` | 当前群聊路由 |
 | `Active window opened:` | 活跃聊天窗口开启/续期 |
 | `Reply parse warning: plain-text-fallback` | 模型返回纯文本，解析器兜底 |
+| `Reply parse warning: embedded-json` | 纯文本里又夹带了协议 JSON（先说话再补 JSON，或把 JSON 当字符串塞回数组）：已拆开并去重，绝不作为气泡发出 |
 | `Reply parse warning: merged-overflow` | 超出气泡条数，已均衡合并 |
 | `Reply parse warning: trimmed-total` | 超出总字数预算，已裁剪 |
 | `stage=outbox sent part=N` | 气泡成功并记录 |
@@ -52,7 +53,7 @@ QQ AI Bot is running.
 
 1. `failed / uncertain` outbox 出现；
 2. sent outbox 缺 assistant / QQ id；
-3. 时间前缀、气泡内换行或悬空分隔标点回归；
+3. 时间前缀、气泡内换行或悬空分隔标点回归；气泡里出现 `{"messages":[…]}` / `{"silent":true}` 原文（2026-09-27 出现过一次）时同样按回归处理：检查解析层的 `embedded-json` 拆解是否生效或修复未部署；
 4. `trimmed-total` 持续高频；
 5. `recovering stale batch` 持续出现；
 6. LLM / QQ 发送 P90 明显高于验收基线；

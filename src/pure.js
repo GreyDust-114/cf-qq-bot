@@ -420,6 +420,89 @@ function stripCodeFence(value) {
   return fenced ? fenced[1].trim() : value;
 }
 
+// 模型偶尔会先正常说一句、再把同一句补成协议 JSON（有时还把 JSON 当成字符串塞
+// 回数组里，2026-09-27 群里就这样泄出过一个 {"messages":[...]} 气泡）。
+// 协议 JSON 本身不是回复内容：这里逐层拆掉它，由调用方决定怎么用；拆不动或
+// 形状不对的 JSON 仍然留在文本里，不影响“让模型举例”这类正常内容。
+const MAX_PROTOCOL_UNWRAP_DEPTH = 3;
+
+function parseProtocolJson(text) {
+  const value = String(text ?? "").trim();
+
+  if (!value.startsWith("{") && !value.startsWith("[")) {
+    return null;
+  }
+
+  let parsed;
+
+  try {
+    parsed = JSON.parse(value);
+  } catch {
+    return null;
+  }
+
+  if (parsed === null || typeof parsed !== "object") {
+    return null;
+  }
+
+  if (parsed.silent === true) {
+    return { silent: true, messages: [] };
+  }
+
+  const list = Array.isArray(parsed)
+    ? parsed
+    : Array.isArray(parsed.messages)
+      ? parsed.messages
+      : null;
+
+  // 一条字符串都没有的“协议”更像普通 JSON，不当协议处理。
+  if (!list || !list.some((item) => typeof item === "string")) {
+    return null;
+  }
+
+  return { silent: false, messages: list };
+}
+
+// 返回 { parts: [{ text, fromJson }], unwrapped }：fromJson 的片段是拆协议
+// JSON 拆出来的，调用方据此去重，避免把同一句话发两遍。
+function extractProtocolJson(item, depth) {
+  const parts = [];
+  let unwrapped = false;
+
+  for (const line of String(item ?? "").split(/\r?\n+/)) {
+    const parsed = depth > 0 ? parseProtocolJson(line) : null;
+
+    if (parsed === null) {
+      parts.push({ text: line, fromJson: false });
+      continue;
+    }
+
+    unwrapped = true;
+
+    if (parsed.silent) {
+      continue;
+    }
+
+    for (const nested of parsed.messages) {
+      if (typeof nested !== "string") {
+        continue;
+      }
+
+      const inner = extractProtocolJson(nested, depth - 1);
+
+      unwrapped = unwrapped || inner.unwrapped;
+      parts.push(
+        ...inner.parts.map((part) => ({ ...part, fromJson: true })),
+      );
+    }
+  }
+
+  return { parts, unwrapped };
+}
+
+// 成行的代码围栏标记是协议格式的衍生物，永远不会是气泡内容。
+const FENCE_ONLY_LINE = /^```[a-zA-Z0-9_+-]*$/;
+
 // A bubble should read like one short chat line. When the model writes a long
 // sentence, split it at punctuation and pack the clauses into short bubbles.
 // Clauses of separate model bubbles are never merged unless the total exceeds
@@ -544,18 +627,42 @@ function mergeToCap(bubbles, maxParts) {
 
 function finalizeReplyMessages(items) {
   const dropped = items.some((item) => typeof item !== "string");
-  // Every line break starts a new model bubble before the 1-4 bubble policy
-  // is applied.
-  const modelBubbles = items
-    .flatMap((item) =>
-      typeof item === "string" ? item.split(/\r?\n+/) : [item],
-    )
-    .filter((item) => typeof item === "string")
-    .map((item) => mdToPlain(item))
-    .filter(Boolean);
+  const seen = new Set();
+  const modelBubbles = [];
+  let embeddedJson = false;
+
+  for (const item of items) {
+    if (typeof item !== "string") {
+      continue;
+    }
+
+    const extracted = extractProtocolJson(item, MAX_PROTOCOL_UNWRAP_DEPTH);
+
+    embeddedJson = embeddedJson || extracted.unwrapped;
+
+    // Every line break starts a new model bubble before the 1-4 bubble policy
+    // is applied.
+    for (const part of extracted.parts) {
+      for (const line of part.text.split(/\r?\n+/)) {
+        const bubble = mdToPlain(line);
+
+        if (!bubble || FENCE_ONLY_LINE.test(bubble)) {
+          continue;
+        }
+
+        // 协议 JSON 只是把刚说过的话又写了一遍：重复的那份直接丢掉。
+        if (part.fromJson && seen.has(bubble)) {
+          continue;
+        }
+
+        seen.add(bubble);
+        modelBubbles.push(bubble);
+      }
+    }
+  }
 
   if (modelBubbles.length === 0) {
-    return { kind: "empty", messages: [], warning: null };
+    return { kind: "empty", messages: [], warning: null, embeddedJson };
   }
 
   const split = modelBubbles.flatMap((bubble) =>
@@ -581,9 +688,12 @@ function finalizeReplyMessages(items) {
       ? "trimmed-total"
       : merged.length < split.length
         ? "merged-overflow"
-        : dropped
-          ? "non-string-bubble"
-          : null,
+        : embeddedJson
+          ? "embedded-json"
+          : dropped
+            ? "non-string-bubble"
+            : null,
+    embeddedJson,
   };
 }
 
@@ -593,6 +703,8 @@ function finalizeReplyMessages(items) {
 // Truncated JSON is rejected outright instead of being sent as text. Plain
 // text is accepted as a single-bubble fallback so an old/invalid model output
 // still produces something reasonable, and the fallback is observable in logs.
+// 纯文本里夹带的协议 JSON（模型先说话、再补 JSON）同样按协议拆开，不会被当成
+// 气泡发出去。
 export function parseReplyOutput(raw) {
   const text = stripCodeFence(String(raw ?? "").trim());
 
@@ -639,9 +751,13 @@ export function parseReplyOutput(raw) {
     };
   }
 
+  const finalized = finalizeReplyMessages([text]);
+
   return {
-    ...finalizeReplyMessages([text]),
-    warning: "plain-text-fallback",
+    ...finalized,
+    warning: finalized.embeddedJson
+      ? "embedded-json"
+      : "plain-text-fallback",
   };
 }
 
