@@ -18,6 +18,7 @@
 - 90 秒活跃续聊：原发言者无需重复 @
 - 短气泡分条、自然发送间隔与新消息中止旧分条
 - D1 对话记忆、冷却状态与逐气泡 outbox
+- 每日长期记忆整理：超过压缩期的原文压成区间摘要与长期画像，原文删除默认 dry-run
 - `pending / sent / failed / uncertain` 可靠发送状态
 - 图片消息、多模态失败回退与正文格式清理
 
@@ -35,7 +36,10 @@ Durable Object: ConversationHub
    ├─ alarm / batch / revision / lease
    ├─ DeepSeek API
    ├─ QQ OpenAPI
-   └─ D1: messages / conversations / settings / outbox
+   └─ D1: conversations / messages / lore / memory_digests / outbox / settings
+
+Cloudflare Cron（北京时间每天 04:00）
+   └─ 长期记忆整理：过期原文 → 区间摘要 + 长期画像（默认 dry-run，不删原文）
 ```
 
 详细设计见 [架构文档](docs/architecture.md)。

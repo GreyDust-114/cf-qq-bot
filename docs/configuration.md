@@ -60,6 +60,7 @@
 | `MEMORY_DIGEST_MAX_CHARS` | 1200 | 单段 digest 长度上限 |
 | `MEMORY_DIGESTS_INJECTED` | 7 | 注入回复上下文时携带的最近 digest 段数 |
 | `MEMORY_TIMEOUT_MS` | 20000 | 单次摘要模型调用上限 |
+| `MEMORY_MAX_TOKENS` | 2000 | 单次摘要输出的 token 上限（整理任务关闭思考，`thinking: false`） |
 
 长度参数来自小规模灰度样本，只用于结构护栏，不用于硬性规定句号、`~` 或其他语言风格。
 

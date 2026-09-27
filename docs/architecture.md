@@ -20,8 +20,13 @@ Durable Object: ConversationHub
        ├─ conversations
        ├─ messages
        ├─ lore
-       ├─ settings
-       └─ outbox
+       ├─ memory_digests
+       ├─ outbox
+       └─ settings
+
+Cloudflare Cron（UTC `0 20 * * *` = 北京时间 04:00）
+   └─ scheduled 入口（src/index.js → src/runtime.js → src/memory.js）
+       └─ 长期记忆整理：digest + 画像 → 推进水位线 → 过期原文删除（默认 dry_run）
 ```
 
 每个群聊或私聊映射到一个 `ConversationHub` Durable Object。同一会话内的批次、生成、发送和状态迁移串行执行；不同会话由不同对象并行处理。
@@ -145,8 +150,11 @@ QQ access token 与过期时间。
 
 | 文件 | 职责 |
 |---|---|
-| `src/index.js` | Worker 入口并导出 Durable Object 类 |
-| `src/runtime.js` | webhook 验签、解析与会话路由 |
+| `src/index.js` | Worker 入口：HTTP fetch、cron scheduled，并导出 Durable Object 类 |
+| `src/runtime.js` | webhook 验签、解析、会话路由与 scheduled 入口 |
+| `src/config.js` | 全部可调常量与固定端点（上下文窗口、时间预算、记忆阈值等） |
+| `src/dependencies.js` | 依赖注入接缝：时钟、sleep、随机数、fetch 与 logger |
+| `src/crypto.js` | Ed25519 密钥派生、webhook 验签与 op:13 签名 |
 | `src/conversation-hub.js` | Durable Object 适配层 |
 | `src/coordinator.js` | alarm、批次、revision、lease 与重试 |
 | `src/coordinator-state.js` | 纯状态迁移与存储恢复 |
@@ -155,5 +163,6 @@ QQ access token 与过期时间。
 | `src/memory.js` | 长期记忆整理：选会话、取区间、模型调用、写 digest 与画像、推进水位线、删除原文 |
 | `src/llm.js` | DeepSeek 调用与图片回退 |
 | `src/sender.js` | 单气泡 QQ 发送与有限网络重试 |
+| `src/token.js` | QQ access token 获取、D1 缓存与并发复用 |
 | `src/pure.js` | 消息解析、提示词消息构建、正文清理与气泡切分 |
 | `src/prompts.js` | 全部提示词、人设、输出协议与兜底话术（唯一编辑入口） |
