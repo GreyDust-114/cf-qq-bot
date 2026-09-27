@@ -1,6 +1,7 @@
 import {
   AUTONOMOUS_COOLDOWN_MAX_MS,
   AUTONOMOUS_COOLDOWN_MIN_MS,
+  CONTEXT_ANCHOR_SLACK_MESSAGES,
   CONTEXT_MAX_CHARS,
   CONTEXT_MAX_MESSAGES,
   CONTEXT_WINDOW_MS,
@@ -53,17 +54,49 @@ export function createStore(deps) {
     };
   }
 
-  async function loadConversationContext(conversationId) {
-    const summaryRow = await db()
+  // 窗口起点由 conversations.context_anchor_at 固定（见 0006 migration）：
+  // 窗口只向后追加、不随新消息滑动，保证静态块之后的历史也是稳定前缀；
+  // 条数超过 上限 + 松弛量时才整体前移一次锚点（用一次全量未命中换长期命中率）。
+  async function loadContextAnchor(conversationId) {
+    const row = await db()
       .prepare(
-        `SELECT summary
+        `SELECT COALESCE(context_anchor_at, 0) AS anchor
          FROM conversations
          WHERE conversation_id = ?`,
       )
       .bind(conversationId)
       .first();
 
-    const since = deps.now() - CONTEXT_WINDOW_MS;
+    return Number(row?.anchor ?? 0);
+  }
+
+  async function setContextAnchor(conversationId, anchor) {
+    await db()
+      .prepare(
+        `UPDATE conversations
+         SET context_anchor_at = ?, updated_at = ?
+         WHERE conversation_id = ?`,
+      )
+      .bind(anchor, deps.now(), conversationId)
+      .run();
+  }
+
+  async function loadConversationContext(conversationId) {
+    const conversationRow = await db()
+      .prepare(
+        `SELECT summary, COALESCE(context_anchor_at, 0) AS anchor
+         FROM conversations
+         WHERE conversation_id = ?`,
+      )
+      .bind(conversationId)
+      .first();
+
+    const since = Math.max(
+      deps.now() - CONTEXT_WINDOW_MS,
+      Number(conversationRow?.anchor ?? 0),
+    );
+    const fetchLimit =
+      CONTEXT_MAX_MESSAGES + CONTEXT_ANCHOR_SLACK_MESSAGES + 1;
 
     const { results } = await db()
       .prepare(
@@ -73,10 +106,17 @@ export function createStore(deps) {
          ORDER BY id DESC
          LIMIT ?`,
       )
-      .bind(conversationId, since, CONTEXT_MAX_MESSAGES)
+      .bind(conversationId, since, fetchLimit)
       .all();
 
-    const rows = (results ?? []).slice().reverse();
+    let rows = (results ?? []).slice().reverse();
+
+    if (rows.length > CONTEXT_MAX_MESSAGES + CONTEXT_ANCHOR_SLACK_MESSAGES) {
+      // 只保留最新的上限条，并把锚点推到保留区第一条，下次从这里开始追加。
+      rows = rows.slice(rows.length - CONTEXT_MAX_MESSAGES);
+
+      await setContextAnchor(conversationId, rows[0].created_at);
+    }
 
     let totalChars = 0;
     const kept = [];
@@ -96,7 +136,7 @@ export function createStore(deps) {
     kept.reverse();
 
     return {
-      summary: summaryRow?.summary ?? "",
+      summary: conversationRow?.summary ?? "",
       digests: await loadRecentDigests(
         conversationId,
         MEMORY_DIGESTS_INJECTED,
@@ -506,6 +546,8 @@ export function createStore(deps) {
     ensureConversation,
     storeIncomingMessage,
     loadConversationContext,
+    loadContextAnchor,
+    setContextAnchor,
     loadRecentDigests,
     loadLore,
     storeAssistantMessage,

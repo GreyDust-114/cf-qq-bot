@@ -52,6 +52,7 @@ npx wrangler d1 migrations apply qq-ai-bot-db --remote
 - `0003_outbox.sql`：逐气泡可靠发送记录
 - `0004_lore.sql`：角色资料库表（内容由维护者本地的语料同步脚本写入，不随仓库分发；表为空时机器人按无人设资料运行）
 - `0005_memory.sql`：长期记忆（`messages.member_openid`、`conversations.summarized_until`、`memory_digests`）
+- `0006_context_anchor.sql`：上下文窗口锚点（`conversations.context_anchor_at`，固定窗口起点以保住前缀缓存）
 
 ## 变量与机密
 

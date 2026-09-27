@@ -12,6 +12,10 @@ export const CONTEXT_WINDOW_MS = 72 * 60 * 60 * 1000;
 // 约等于 2 天活跃内容（≈1 万字符 / 5～8K tokens），超出的旧内容由 digest
 // 承担，避免把整个窗口塞进提示词。
 export const CONTEXT_MAX_MESSAGES = 400;
+// 窗口起点用 conversations.context_anchor_at 固定（见 0006 migration）：
+// 只有条数超过 上限 + 松弛量 时才整体前移一次，避免“每条新消息都换前缀”
+// 导致历史块永远无法命中前缀缓存。
+export const CONTEXT_ANCHOR_SLACK_MESSAGES = 200;
 export const CONTEXT_MAX_CHARS = 60000;
 export const STORED_CONTENT_MAX_CHARS = 2000;
 export const MAX_REPLY_CHARS = 1800;
