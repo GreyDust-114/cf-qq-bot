@@ -569,6 +569,17 @@ export function createProcessor(env, overrides = {}) {
       contentLength: trigger.content.length,
     });
 
+    // 贴纸单独成批时不打扰也不花钱（BOT-019）：群里单发一张贴纸又不是在
+    // 跟机器人说话，默认保持沉默；被 @、被引用（走 mention）或处于活跃续聊
+    // （走 active）时仍然正常回复。
+    if (
+      route === "autonomous" &&
+      messages.every((message) => message.hasSticker === true)
+    ) {
+      deps.logger.log("Decision: no reply (sticker only)");
+      return { status: "silent" };
+    }
+
     const tokenPromise = prefetchToken();
 
     if (trigger.scope === "c2c") {

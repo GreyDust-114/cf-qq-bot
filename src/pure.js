@@ -218,12 +218,23 @@ export function collectImageUrlInto(urls, att) {
   urls.push(url);
 }
 
-export function collectImageUrls(attachments, urls = []) {
+export function collectImageUrls(attachments, urls = [], options = {}) {
   if (!Array.isArray(attachments)) {
     return urls;
   }
 
+  // 贴纸消息的第一张图就是贴纸本身（BOT-019）：它不进上下文，避免模型对着
+  // 画面说话；同一条消息里多余的真图仍然收集。
+  let stickerImagePending = options.skipFirstImage === true;
+
   for (const att of attachments) {
+    const contentType = String(att?.content_type ?? "").toLowerCase();
+
+    if (stickerImagePending && contentType.startsWith("image/")) {
+      stickerImagePending = false;
+      continue;
+    }
+
     collectImageUrlInto(urls, att);
   }
 
@@ -394,7 +405,9 @@ export function buildRichContent(message, env) {
     .trim();
 
   const imageUrls = [];
-  collectImageUrls(message?.attachments, imageUrls);
+  collectImageUrls(message?.attachments, imageUrls, {
+    skipFirstImage: hasSticker,
+  });
   collectImageUrlsFromElements(message?.msg_elements, imageUrls);
 
   return {
@@ -902,6 +915,10 @@ export function buildPrivateMessages(context, incoming, options = {}) {
       row.role === "assistant"
         ? row.content
         : `[${formatMessageTime(row.created_at)}] ${row.content}`;
+    const text =
+      isCurrent && incoming.hasSticker === true
+        ? `${line}\n${STICKER_NOTE}`
+        : line;
 
     if (
       isCurrent &&
@@ -911,17 +928,14 @@ export function buildPrivateMessages(context, incoming, options = {}) {
       messages.push({
         role,
         content: [
-          {
-            type: "text",
-            text: incoming.hasSticker ? `${line}\n${STICKER_NOTE}` : line,
-          },
+          { type: "text", text },
           ...buildImageParts(incoming.imageUrls),
         ],
       });
       return;
     }
 
-    messages.push({ role, content: line });
+    messages.push({ role, content: text });
   });
 
   if (history.length === 0) {
@@ -1010,6 +1024,10 @@ export function buildGroupMessages(context, incoming, options = {}) {
       text += GROUP_CONTINUATION_HINT;
     }
 
+    if (isCurrent && incoming.hasSticker === true) {
+      text += `\n${STICKER_NOTE}`;
+    }
+
     if (
       isCurrent &&
       options.includeImages !== false &&
@@ -1018,10 +1036,7 @@ export function buildGroupMessages(context, incoming, options = {}) {
       messages.push({
         role: "user",
         content: [
-          {
-            type: "text",
-            text: incoming.hasSticker ? `${text}\n${STICKER_NOTE}` : text,
-          },
+          { type: "text", text },
           ...buildImageParts(incoming.imageUrls),
         ],
       });

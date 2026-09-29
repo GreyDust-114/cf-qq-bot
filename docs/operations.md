@@ -23,6 +23,7 @@ QQ AI Bot is running.
 | `Coordinator: dropping stale reply` | 新 revision 拦截旧生成 |
 | `Route: active/mention/autonomous` | 当前群聊路由 |
 | `Active window opened:` | 活跃聊天窗口开启/续期 |
+| `Decision: no reply (sticker only)` | 单发贴纸且未 @、不在活跃窗口：默认沉默，不调模型（BOT-019） |
 | `Reply parse warning: plain-text-fallback` | 模型返回纯文本，解析器兜底 |
 | `Reply parse warning: embedded-json` | 纯文本里又夹带了协议 JSON（先说话再补 JSON，或把 JSON 当字符串塞回数组）：已拆开并去重，绝不作为气泡发出 |
 | `Reply parse warning: merged-overflow` | 超出气泡条数，已均衡合并 |
@@ -88,15 +89,16 @@ QQ AI Bot is running.
 
 ### 贴纸被当成图片描述
 
-看该条消息的入库正文与 `Incoming message:` 的 `stickers` 计数：
+看该条消息的入库正文与 `Incoming message:` / `stage=usage` 的计数：
 
 - 正文应为 `【贴纸】` / `【贴纸:名字】`，不应是 `【表情】` + `【图片】`；`stickers=1` 说明判定生效。
-- 判定条件是“正文只有图片类表情（`faceType=4/6`）且有图片附件”；若真实贴纸仍落入 `【图片】`，先把 faceType 记下来再修解析层（不要靠猜）。
-- 判定生效但回复仍在描述画面：检查 `stage=usage` 里该次调用的 `stickers=` 与提示词版本（当前消息应带贴纸说明）；必要时评估“不给贴纸图、只按上下文”的回退方案。
+- 贴纸消息应为 `stickers=1` 且 `images=0`（贴纸图不进上下文）；若 `images=1`，说明当时跑的还是旧版（BOT-019 修复前）或走了 `+no-images` 回退路径。
+- 单发贴纸默认沉默应看到 `Decision: no reply (sticker only)`；被 @、被引用或活跃续聊时不适用。
+- 若回复仍在猜贴纸内容/画面：检查提示词版本与部署产物（当前消息应带贴纸说明）；语义积累（指纹、标签、私聊询问 owner）在 `BOT-020`，未上线前不要指望机器人认得出具体贴纸。
 
 ## 已知限制
 
 - 原始上下文窗口 72 小时 / 400 条 / 6 万字符；窗口外的内容由每日整理出的画像与 digest 承担（删除默认关闭，先 dry_run）
-- 不支持发送贴纸与网络搜索；入站贴纸按情绪语义识别（正文写成 `【贴纸】` / `【贴纸:名字】`）
+- 不支持发送贴纸与网络搜索；入站贴纸按情绪语义处理（正文写成 `【贴纸】` / `【贴纸:名字】`，图不进上下文）
 - 图片只在当前消息内识别，历史仅保存占位描述
 - `uncertain` 不会自动重发，需要人工确认后使用同一 msg_seq 恢复
