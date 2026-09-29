@@ -23,6 +23,7 @@ import {
   GROUP_MENTION_HINT,
   GROUP_NO_MENTION_HINT,
   GROUP_CONTINUATION_HINT,
+  STICKER_NOTE,
   groupSummaryPrompt,
   loreMessage,
   privateSummaryPrompt,
@@ -86,27 +87,72 @@ export function estimateBase64Size(base64) {
   return Math.ceil((len * 3) / 4) - padding;
 }
 
+// 表情标签：小表情、超大表情、图片表情在 QQ 侧是同一段 XML，靠 faceType
+// 区分（1=内联小表情，4=超大表情，6=图片表情）。
+const FACE_TAG_PATTERN = /<faceType=(\d+),faceId="[^"]*",ext="([^"]*)">/g;
+const LEGACY_FACE_PATTERN = /\[<face,id=\d+\/?>]/g;
+// 图片类表情才算贴纸。正文里的小表情（faceType=1）即使同一条消息带了
+// 图片，也不能当贴纸（2026-09-29 生产样本）。
+const STICKER_FACE_TYPES = new Set(["4", "6"]);
+
 export function parseFaceTags(text) {
   return String(text ?? "")
-    .replace(
-      /<faceType=\d+,faceId="[^"]*",ext="([^"]*)">/g,
-      (match, ext) => {
-        try {
-          if (estimateBase64Size(ext) > MAX_FACE_EXT_BYTES) {
-            return "【表情】";
-          }
-
-          const decoded = Buffer.from(ext, "base64").toString("utf8");
-          const parsed = JSON.parse(decoded);
-          const name = String(parsed?.text ?? "").trim();
-
-          return name ? `【表情:${name}】` : "【表情】";
-        } catch {
+    .replace(FACE_TAG_PATTERN, (match, faceType, ext) => {
+      try {
+        if (estimateBase64Size(ext) > MAX_FACE_EXT_BYTES) {
           return "【表情】";
         }
-      },
-    )
-    .replace(/\[<face,id=\d+\/?>]/g, "【表情】");
+
+        const decoded = Buffer.from(ext, "base64").toString("utf8");
+        const parsed = JSON.parse(decoded);
+        const name = String(parsed?.text ?? "").trim();
+
+        return name ? `【表情:${name}】` : "【表情】";
+      } catch {
+        return "【表情】";
+      }
+    })
+    .replace(LEGACY_FACE_PATTERN, "【表情】");
+}
+
+// 贴纸消息判定（BOT-019）：正文只有表情标签、其中至少一个是图片类表情
+// （faceType 4/6），并且带了图片附件——生产里贴纸就是这样到的。带正文的
+// 图文消息、只发小表情的消息都不算。
+export function detectStickerMessage(message) {
+  const content = String(message?.content ?? "");
+  const faces = content.match(FACE_TAG_PATTERN) ?? [];
+
+  if (faces.length === 0) {
+    return false;
+  }
+
+  const hasStickerFace = faces.some((tag) =>
+    STICKER_FACE_TYPES.has(
+      String(tag).match(/^<faceType=(\d+)/)?.[1] ?? "",
+    ),
+  );
+
+  if (!hasStickerFace) {
+    return false;
+  }
+
+  if (content.replace(FACE_TAG_PATTERN, "").trim() !== "") {
+    return false;
+  }
+
+  return (message?.attachments ?? []).some((attachment) =>
+    String(attachment?.content_type ?? "")
+      .toLowerCase()
+      .startsWith("image/"),
+  );
+}
+
+// 贴纸消息里的表情占位改叫贴纸，避免模型把它当成一张普通图片。
+export function stickerFaceLabels(text) {
+  return String(text ?? "").replace(
+    /【表情(:[^】]*)?】/g,
+    (match, name) => `【贴纸${name || ""}】`,
+  );
 }
 
 export function cleanContent(content, appId) {
@@ -205,17 +251,25 @@ export function collectImageUrlsFromElements(elements, urls, depth = 0) {
   return urls;
 }
 
-export function describeAttachments(attachments) {
+export function describeAttachments(attachments, options = {}) {
   if (!Array.isArray(attachments) || attachments.length === 0) {
     return "";
   }
 
   const parts = [];
+  // 贴纸消息的第一张图就是贴纸本身：正文已经写成【贴纸】，这里不再
+  // 重复标【图片】；多余图片仍按普通图片处理。
+  let stickerImagePending = options.skipFirstImage === true;
 
   for (const att of attachments) {
     const contentType = String(att?.content_type ?? "").toLowerCase();
 
     if (contentType.startsWith("image/")) {
+      if (stickerImagePending) {
+        stickerImagePending = false;
+        continue;
+      }
+
       parts.push("【图片】");
     } else if (
       contentType === "voice" ||
@@ -319,13 +373,19 @@ export function detectQuotedBot(message) {
 }
 
 export function buildRichContent(message, env) {
-  const content = cleanContent(message?.content, env.QQ_APP_ID);
+  const hasSticker = detectStickerMessage(message);
+  const cleanedContent = cleanContent(message?.content, env.QQ_APP_ID);
+  const content = hasSticker
+    ? stickerFaceLabels(cleanedContent)
+    : cleanedContent;
   const elementsText = describeMsgElements(
     message?.msg_elements,
     0,
     message?.message_type === 103,
   );
-  const attachmentText = describeAttachments(message?.attachments);
+  const attachmentText = describeAttachments(message?.attachments, {
+    skipFirstImage: hasSticker,
+  });
   const arkText = describeArkData(message?.ark_data);
 
   const text = [elementsText, content, attachmentText, arkText]
@@ -337,7 +397,12 @@ export function buildRichContent(message, env) {
   collectImageUrls(message?.attachments, imageUrls);
   collectImageUrlsFromElements(message?.msg_elements, imageUrls);
 
-  return { text, imageUrls, quotedBot: detectQuotedBot(message) };
+  return {
+    text,
+    imageUrls,
+    hasSticker,
+    quotedBot: detectQuotedBot(message),
+  };
 }
 
 export function truncateStoredContent(text) {
@@ -846,7 +911,10 @@ export function buildPrivateMessages(context, incoming, options = {}) {
       messages.push({
         role,
         content: [
-          { type: "text", text: line },
+          {
+            type: "text",
+            text: incoming.hasSticker ? `${line}\n${STICKER_NOTE}` : line,
+          },
           ...buildImageParts(incoming.imageUrls),
         ],
       });
@@ -950,7 +1018,10 @@ export function buildGroupMessages(context, incoming, options = {}) {
       messages.push({
         role: "user",
         content: [
-          { type: "text", text },
+          {
+            type: "text",
+            text: incoming.hasSticker ? `${text}\n${STICKER_NOTE}` : text,
+          },
           ...buildImageParts(incoming.imageUrls),
         ],
       });
@@ -1014,6 +1085,7 @@ export function parseIncomingMessage(payload, env) {
       messageId: message.id,
       content: rich.text,
       imageUrls: rich.imageUrls,
+      hasSticker: rich.hasSticker === true,
       senderName: "用户",
       wasMentioned: true,
     };
@@ -1066,6 +1138,7 @@ export function parseIncomingMessage(payload, env) {
       messageId: message.id,
       content: rich.text,
       imageUrls: rich.imageUrls,
+      hasSticker: rich.hasSticker === true,
       senderName: message?.author?.username?.trim() || "群成员",
       memberOpenid,
       wasMentioned,

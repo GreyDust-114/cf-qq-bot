@@ -72,6 +72,7 @@ export function createLlmClient(deps) {
           usage.completion_tokens_details?.reasoning_tokens ?? "?"
         } ` +
         `images=${options.imageCount ?? 0} ` +
+        `stickers=${options.stickerCount ?? 0} ` +
         `finish=${finishReason} ` +
         `ms=${elapsedMs}`,
     );
@@ -110,6 +111,7 @@ export function createLlmClient(deps) {
         ...options,
         timeoutMs: timeout,
         imageCount: includeImages ? (options.imageCount ?? 0) : 0,
+        stickerCount: includeImages ? (options.stickerCount ?? 0) : 0,
         label: includeImages
           ? (options.label ?? "unknown")
           : `${options.label ?? "unknown"}+no-images`,

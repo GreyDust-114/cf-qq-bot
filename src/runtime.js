@@ -73,6 +73,7 @@ export function createRuntime(env, overrides = {}) {
       conversationId: incoming.conversationId,
       wasMentioned: incoming.wasMentioned,
       images: incoming.imageUrls.length,
+      stickers: incoming.hasSticker ? 1 : 0,
       contentLength: incoming.content.length,
     });
 

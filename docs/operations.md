@@ -17,7 +17,7 @@ QQ AI Bot is running.
 
 | 日志 | 含义 |
 |---|---|
-| `Incoming message:` | webhook 消息已解析 |
+| `Incoming message:` | webhook 消息已解析（含 `images` / `stickers` 计数） |
 | `stage=coordinator enqueue` | 进入会话协调器 |
 | `stage=coordinator batch start/done` | 批次开始/结束 |
 | `Coordinator: dropping stale reply` | 新 revision 拦截旧生成 |
@@ -31,7 +31,7 @@ QQ AI Bot is running.
 | `stage=outbox failed part=N` | 确定性失败 |
 | `stage=outbox uncertain part=N` | 发送结果不确定，不自动重发 |
 | `stage=llm ok in Xms` | 模型耗时 |
-| `stage=usage request=…` | 每次模型调用的 token 用量：`prompt` / `hit` / `miss` / `out` / `thinking` / `images` / `finish` / `ms`；`request` 为路由标签（`private` / `mention` / `active` / `autonomous` / `memory`），视觉回退时带 `+no-images`；空正文的失败调用同样记一行 |
+| `stage=usage request=…` | 每次模型调用的 token 用量：`prompt` / `hit` / `miss` / `out` / `thinking` / `images` / `stickers` / `finish` / `ms`；`request` 为路由标签（`private` / `mention` / `active` / `autonomous` / `memory`），视觉回退时带 `+no-images`；空正文的失败调用同样记一行 |
 | `stage=memory conversation=…` | 长期记忆整理的单段结果：`messages` / `from`-`to` / `until`（推进后的水位线）/ `delete_before`（实际可删边界，受保留期约束）/ `digest` / `profile` 字符数 / `deleted` 条数 / `dry_run` |
 | `stage=memory done …` | 单次整理批次汇总：涉及会话数、块数、消息数、删除数、`failures`、`dry_run`、耗时 |
 | `stage=memory failed` | 单段整理失败（模型或写入）；原文保留，下次重试 |
@@ -86,9 +86,17 @@ QQ AI Bot is running.
 
 查看 `trimmed-total` 告警与 `MAX_REPLY_TOTAL_CHARS`；提示词用于软引导，解析层硬预算用于兜底。
 
+### 贴纸被当成图片描述
+
+看该条消息的入库正文与 `Incoming message:` 的 `stickers` 计数：
+
+- 正文应为 `【贴纸】` / `【贴纸:名字】`，不应是 `【表情】` + `【图片】`；`stickers=1` 说明判定生效。
+- 判定条件是“正文只有图片类表情（`faceType=4/6`）且有图片附件”；若真实贴纸仍落入 `【图片】`，先把 faceType 记下来再修解析层（不要靠猜）。
+- 判定生效但回复仍在描述画面：检查 `stage=usage` 里该次调用的 `stickers=` 与提示词版本（当前消息应带贴纸说明）；必要时评估“不给贴纸图、只按上下文”的回退方案。
+
 ## 已知限制
 
 - 原始上下文窗口 72 小时 / 400 条 / 6 万字符；窗口外的内容由每日整理出的画像与 digest 承担（删除默认关闭，先 dry_run）
-- 不支持贴纸与网络搜索
+- 不支持发送贴纸与网络搜索；入站贴纸按情绪语义识别（正文写成 `【贴纸】` / `【贴纸:名字】`）
 - 图片只在当前消息内识别，历史仅保存占位描述
 - `uncertain` 不会自动重发，需要人工确认后使用同一 msg_seq 恢复
