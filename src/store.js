@@ -91,10 +91,15 @@ export function createStore(deps) {
       .bind(conversationId)
       .first();
 
-    const since = Math.max(
-      deps.now() - CONTEXT_WINDOW_MS,
-      Number(conversationRow?.anchor ?? 0),
-    );
+    const windowStart = deps.now() - CONTEXT_WINDOW_MS;
+    const storedAnchor = Number(conversationRow?.anchor ?? 0);
+    // 起点只认锚点：首次使用时把当前时间边界固化成锚点（只写一次），
+    // 之后即使消息陆续滑出 72 小时也不改起点，历史才能持续命中前缀缓存。
+    const since = storedAnchor > 0 ? storedAnchor : windowStart;
+
+    if (storedAnchor <= 0) {
+      await setContextAnchor(conversationId, windowStart);
+    }
     const fetchLimit =
       CONTEXT_MAX_MESSAGES + CONTEXT_ANCHOR_SLACK_MESSAGES + 1;
 
@@ -111,6 +116,21 @@ export function createStore(deps) {
 
     let rows = (results ?? []).slice().reverse();
 
+    // 长时间静默（超过窗口）后重新开窗：否则会把很久以前的上下文一直带进提示词。
+    if (
+      rows.length > 0 &&
+      deps.now() - rows[rows.length - 1].created_at > CONTEXT_WINDOW_MS
+    ) {
+      const freshStart = deps.now() - CONTEXT_WINDOW_MS;
+
+      rows = rows.filter((row) => row.created_at >= freshStart);
+
+      await setContextAnchor(
+        conversationId,
+        rows.length > 0 ? rows[0].created_at : freshStart,
+      );
+    }
+
     if (rows.length > CONTEXT_MAX_MESSAGES + CONTEXT_ANCHOR_SLACK_MESSAGES) {
       // 只保留最新的上限条，并把锚点推到保留区第一条，下次从这里开始追加。
       rows = rows.slice(rows.length - CONTEXT_MAX_MESSAGES);
@@ -120,12 +140,14 @@ export function createStore(deps) {
 
     let totalChars = 0;
     const kept = [];
+    let trimmedByChars = false;
 
     for (let i = rows.length - 1; i >= 0; i -= 1) {
       const row = rows[i];
       const nextTotal = totalChars + row.content.length;
 
       if (nextTotal > CONTEXT_MAX_CHARS && kept.length > 0) {
+        trimmedByChars = true;
         break;
       }
 
@@ -134,6 +156,12 @@ export function createStore(deps) {
     }
 
     kept.reverse();
+
+    // 字符上限裁掉旧消息时，起点会随新消息前移、历史块重新变成浮动前缀：
+    // 把锚点回写到保留区第一条，下一次调用从这里开始追加（架构评审 P0-2）。
+    if (trimmedByChars && kept.length > 0) {
+      await setContextAnchor(conversationId, kept[0].created_at);
+    }
 
     return {
       summary: conversationRow?.summary ?? "",
