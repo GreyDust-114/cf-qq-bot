@@ -87,7 +87,7 @@ export const MEMORY_MAX_CHARS_PER_CHUNK = 40000;
 export const MEMORY_MAX_CHUNKS_PER_CONVERSATION = 4;
 export const MEMORY_MAX_CONVERSATIONS_PER_RUN = 20;
 // 画像与单段 digest 的输出长度上限（字符），注入时同样受这两个值约束。
-export const MEMORY_PROFILE_MAX_CHARS = 1200;
+export const MEMORY_PROFILE_MAX_CHARS = 1800;
 export const MEMORY_DIGEST_MAX_CHARS = 1200;
 // 注入回复上下文时携带最近几段 digest，更早的细节由画像承担。
 export const MEMORY_DIGESTS_INJECTED = 7;

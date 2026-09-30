@@ -56,7 +56,7 @@
 | `MEMORY_MAX_CHARS_PER_CHUNK` | 40000 | 单次摘要输入的字符上限 |
 | `MEMORY_MAX_CHUNKS_PER_CONVERSATION` | 4 | 每个会话每轮最多压缩几块 |
 | `MEMORY_MAX_CONVERSATIONS_PER_RUN` | 20 | 每轮最多处理几个会话 |
-| `MEMORY_PROFILE_MAX_CHARS` | 1200 | 长期画像长度上限 |
+| `MEMORY_PROFILE_MAX_CHARS` | 1800 | 长期画像长度上限（2026-09-30 从 1200 放宽，画像此前连续顶到上限） |
 | `MEMORY_DIGEST_MAX_CHARS` | 1200 | 单段 digest 长度上限 |
 | `MEMORY_DIGESTS_INJECTED` | 7 | 注入回复上下文时携带的最近 digest 段数 |
 | `MEMORY_TIMEOUT_MS` | 20000 | 单次摘要模型调用上限 |
