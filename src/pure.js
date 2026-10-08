@@ -1,4 +1,5 @@
 import { Buffer } from "node:buffer";
+import { inspectReplyCandidate } from "./reply-safety.js";
 
 import {
   MAX_FACE_EXT_BYTES,
@@ -743,6 +744,20 @@ function finalizeReplyMessages(items) {
     return { kind: "empty", messages: [], warning: null, embeddedJson };
   }
 
+  for (const bubble of modelBubbles) {
+    const safetyRule = inspectReplyCandidate(bubble);
+
+    if (safetyRule) {
+      return {
+        kind: "unsafe",
+        messages: [],
+        warning: "internal-control",
+        safetyRule,
+        embeddedJson,
+      };
+    }
+  }
+
   const split = modelBubbles.flatMap((bubble) =>
     splitLongBubble(bubble, BUBBLE_TARGET_MAX_CHARS),
   );
@@ -823,9 +838,11 @@ export function parseReplyOutput(raw) {
   }
 
   if (text.includes("|||")) {
+    const finalized = finalizeReplyMessages(text.split("|||"));
+
     return {
-      ...finalizeReplyMessages(text.split("|||")),
-      warning: "legacy-separator",
+      ...finalized,
+      warning: finalized.warning ?? "legacy-separator",
     };
   }
 
@@ -833,9 +850,9 @@ export function parseReplyOutput(raw) {
 
   return {
     ...finalized,
-    warning: finalized.embeddedJson
-      ? "embedded-json"
-      : "plain-text-fallback",
+    warning:
+      finalized.warning ??
+      (finalized.embeddedJson ? "embedded-json" : "plain-text-fallback"),
   };
 }
 

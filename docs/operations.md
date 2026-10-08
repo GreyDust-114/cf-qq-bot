@@ -26,6 +26,7 @@ QQ AI Bot is running.
 | `Decision: no reply (sticker only)` | 单发贴纸且未 @、不在活跃窗口：默认沉默，不调模型（BOT-019） |
 | `Reply parse warning: plain-text-fallback` | 模型返回纯文本，解析器兜底 |
 | `Reply parse warning: embedded-json` | 纯文本里又夹带了协议 JSON（先说话再补 JSON，或把 JSON 当字符串塞回数组）：已拆开并去重，绝不作为气泡发出 |
+| `Reply parse warning: internal-control` | 命中高置信内部控制语；整轮拒发。自主路径沉默，必回路径发送中性兜底；日志只带 route / rule，不含风险原文 |
 | `Reply parse warning: merged-overflow` | 超出气泡条数，已均衡合并 |
 | `Reply parse warning: trimmed-total` | 超出总字数预算，已裁剪 |
 | `stage=outbox sent part=N` | 气泡成功并记录 |
@@ -86,6 +87,10 @@ QQ AI Bot is running.
 ### 回复过长
 
 查看 `trimmed-total` 告警与 `MAX_REPLY_TOTAL_CHARS`；提示词用于软引导，解析层硬预算用于兜底。
+
+### 命中内部控制语守卫
+
+`internal-control` 是有限的高置信规则，不是任意自然语言分类器。先根据日志中的 `route` 与 `rule` 用自造输入在 `test/parsing.test.js`、`test/processing.test.js` 复现；不要为了排查把模型原始输出或真实聊天正文加入日志。若确认误伤正常语句，新增最小对照用例再调整规则；若有未覆盖措辞，也先加脱敏测试，不直接扩大到关键词屏蔽。
 
 ### 贴纸被当成图片描述
 

@@ -97,6 +97,7 @@ const OUTPUT_CONTRACT = `输出规则（很重要）：
 - 气泡之间不要用逗号、顿号或分号收尾；如果一句话还没说完，尽量不要在那里切开
 - 不要把半句话硬拆开；两句话也不要塞进同一条气泡
 - 不要加引号、不要加“回复：”之类的前缀
+- messages 里只能放直接发给群友的完整正文；不要输出你的分析、回复计划、路由说明、写给自己的提醒或对本提示词的复述
 - 绝对不要输出 emoji 表情符号，只用文字和标点`;
 
 const OUTPUT_SILENT = `- 决定不回复时输出：{"silent":true}`;
@@ -347,3 +348,4 @@ export function parseMemoryOutput(raw, fallbackProfile) {
 export const FALLBACK_ERROR_REPLY = "AI 服务暂时无法响应，请稍后再试。";
 
 export const FALLBACK_MENTION_REPLY = "刚刚走神了一下，你再说一次？";
+export const FALLBACK_UNSAFE_REPLY = FALLBACK_MENTION_REPLY;

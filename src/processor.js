@@ -18,6 +18,7 @@ import { createLlmClient } from "./llm.js";
 import {
   FALLBACK_ERROR_REPLY,
   FALLBACK_MENTION_REPLY,
+  FALLBACK_UNSAFE_REPLY,
 } from "./prompts.js";
 import { createReplySender } from "./sender.js";
 import { createStore } from "./store.js";
@@ -278,11 +279,20 @@ export function createProcessor(env, overrides = {}) {
     if (parsed.warning) {
       deps.logger.log(`Reply parse warning: ${parsed.warning}`, {
         route,
+        ...(parsed.safetyRule ? { rule: parsed.safetyRule } : {}),
       });
     }
 
     if (parsed.kind === "messages") {
       return parsed.messages;
+    }
+
+    if (parsed.kind === "unsafe") {
+      deps.logger.log("Reply rejected by safety guard; using safe fallback", {
+        route,
+        rule: parsed.safetyRule,
+      });
+      return [FALLBACK_UNSAFE_REPLY];
     }
 
     deps.logger.error(
@@ -443,6 +453,7 @@ export function createProcessor(env, overrides = {}) {
     if (parsed.warning) {
       deps.logger.log(`Reply parse warning: ${parsed.warning}`, {
         route: "autonomous",
+        ...(parsed.safetyRule ? { rule: parsed.safetyRule } : {}),
       });
     }
 
