@@ -88,6 +88,14 @@ export const MEMORY_MAX_CHUNKS_PER_CONVERSATION = 4;
 export const MEMORY_MAX_CONVERSATIONS_PER_RUN = 20;
 // 画像与单段 digest 的输出长度上限（字符），注入时同样受这两个值约束。
 export const MEMORY_PROFILE_MAX_CHARS = 1800;
+// 长期画像按小节组织；每节条数写满时淘汰最久没再提到的那条，避免画像只增不减、
+// 反复顶到字符上限（2026-10-08 复核：1200 → 1800 后一周又被写满）。
+export const MEMORY_PROFILE_SECTIONS = [
+  { title: "人物与关系", maxItems: 8 },
+  { title: "偏好与习惯", maxItems: 6 },
+  { title: "约定与未完成", maxItems: 6 },
+  { title: "其他", maxItems: 4 },
+];
 export const MEMORY_DIGEST_MAX_CHARS = 1200;
 // 注入回复上下文时携带最近几段 digest，更早的细节由画像承担。
 export const MEMORY_DIGESTS_INJECTED = 7;

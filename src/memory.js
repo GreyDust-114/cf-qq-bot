@@ -22,6 +22,7 @@ import {
   MEMORY_MAX_MESSAGES_PER_CHUNK,
   MEMORY_MAX_TOKENS,
   MEMORY_PROFILE_MAX_CHARS,
+  MEMORY_PROFILE_SECTIONS,
   MEMORY_RETENTION_MS,
   MEMORY_TIMEOUT_MS,
 } from "./config.js";
@@ -132,6 +133,7 @@ export function createMemoryRunner(deps) {
           content: memorySystemPrompt({
             profileChars: MEMORY_PROFILE_MAX_CHARS,
             digestChars: MEMORY_DIGEST_MAX_CHARS,
+            sections: MEMORY_PROFILE_SECTIONS,
           }),
         },
         {

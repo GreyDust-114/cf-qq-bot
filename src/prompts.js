@@ -254,7 +254,11 @@ export function recentMemoryPrompt(lines) {
 
 // 整理任务与聊天任务分开：这里要求的是可长期复用的要点，不是聊天口气。
 // 长度上限由调用方传入（生产取自 src/config.js），保持本文件无依赖。
-export function memorySystemPrompt({ profileChars, digestChars }) {
+export function memorySystemPrompt({ profileChars, digestChars, sections }) {
+  const sectionLines = (sections ?? []).map(
+    (section) => `- 「${section.title}」最多 ${section.maxItems} 条`,
+  );
+
   return [
     "你在把群聊机器人读到的一段聊天整理成长期记忆，供机器人以后回忆。",
     "",
@@ -267,11 +271,16 @@ export function memorySystemPrompt({ profileChars, digestChars }) {
     "不要写：闲聊复述、情绪描写、你对说话人的评价、没有根据的推测。",
     "不确定的内容宁可不写，也不要猜。",
     "",
-    "严格按下面两个区块输出，不要写其他内容：",
-    "【画像】",
-    `（合并旧画像与本期新信息后的长期画像，条目式，≤${profileChars} 字）`,
+    "【画像】按小节组织，顺序与标题照抄（每个小节都要写出标题，一个都不能省）：",
+    ...sectionLines,
+    "同一小节写满时，先删掉最久没再被提到、最不重要的一条，再写新的；",
+    "已经不再成立的事实直接删掉，不要留着过时信息。",
+    `（整份画像不超过 ${profileChars} 字）`,
+    "",
     "【本期】",
     `（这一段聊天里值得长期保留的要点，条目式，≤${digestChars} 字）`,
+    "",
+    "两个区块都要写，严格用【画像】【本期】作为标记，不要写其他内容。",
   ].join("\n");
 }
 
