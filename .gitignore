@@ -19,4 +19,6 @@ TODO.md
 *.log
 dist/
 .mcp.json
+# pi agent 的本地 MCP 配置（按会话生成，不进仓库）
+.pi/
 review/
