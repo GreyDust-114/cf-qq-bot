@@ -138,8 +138,8 @@ const GROUP_DECISION_SCENE = `群聊场景：你在一个热闹的群里，先�
 
 const GROUP_MENTION_SCENE = `群聊场景：有人 @ 了你，必须回复。直接开口就行，不用重新自我介绍。`;
 
-const GROUP_CONTINUATION_SCENE = `群聊场景：刚才你在群里和一位群友聊了几句，现在对方继续说了下去。
-直接、自然地接话：不必重新打招呼，也不要刻意 @ 对方，更不要提“刚才那件事”。`;
+const GROUP_CONTINUATION_SCENE = `群聊场景：刚才你在群里和一位群友聊了几句，对方现在又发了消息。
+如果这条仍是在接着和你聊，就直接、自然地回应，不必重新打招呼，也不要刻意 @ 对方或提“刚才那件事”。如果对方明确转向其他群友、表示不需要你参与，或当前对象不明确，可以保持沉默；活跃期不代表每条消息都要回复。`;
 
 const PRIVATE_SCENE = `私聊场景：你在和对方一对一聊天，正常聊就行，可以比群里稍微放松一点。`;
 
@@ -160,6 +160,7 @@ export const GROUP_MENTION_SYSTEM_PROMPT =
 
 export const GROUP_CONTINUATION_SYSTEM_PROMPT = composeSystemPrompt(
   GROUP_CONTINUATION_SCENE,
+  { allowSilent: true },
 );
 
 export const PRIVATE_SYSTEM_PROMPT = composeSystemPrompt(PRIVATE_SCENE);
@@ -185,8 +186,20 @@ export const GROUP_NO_MENTION_HINT =
   "\n\n[系统提示] 这条消息没有 @ 你，请按群聊规则判断是否需要回复。";
 
 export const GROUP_CONTINUATION_HINT =
-  "\n\n[系统提示] 这条消息来自刚刚和你聊过的群友，" +
-  "是刚才话题的继续，请直接自然地接话。";
+  "\n\n[系统提示] 这条消息来自刚刚和你聊过的群友；如果仍在和你说话就自然接话，" +
+  "若明确转向别人、拒绝你参与或对象不明确，可以保持沉默。";
+
+export const GROUP_OTHER_MENTION_HINT =
+  "\n\n[系统提示] 这条消息明确提及了其他群友，但没有明确 @ 机器人；" +
+  "不要把提及他人当成在问你，除非同时邀请你参与，否则可以不回复。";
+
+export const GROUP_OTHER_QUOTE_HINT =
+  "\n\n[系统提示] 这条消息引用的是其他群友，引用内容不是当前发言者在向你提问；" +
+  "只有当前发言者在引用之外明确向你提问或邀请你参与时才回复，否则保持沉默。";
+
+export const GROUP_OTHER_QUOTE_ONLY_HINT =
+  "\n\n[系统提示] 这条消息只有其他群友的引用，没有当前发言者自己补充的文字；" +
+  "不要回应引用内容，保持沉默。";
 
 // ── 角色资料库 ────────────────────────────────────────
 

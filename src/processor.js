@@ -243,10 +243,9 @@ export function createProcessor(env, overrides = {}) {
     return { status: "replied", sentTexts, stopped };
   }
 
-  // Any successful group reply opens (or refreshes) the active window: the
-  // person whose message carried the reply gets the forced reply path for
-  // their follow-ups, so the interjection decision and its cooldown never
-  // swallow the ongoing conversation.
+  // Any successful group reply opens (or refreshes) the active window. It
+  // provides a continuation decision path for that speaker, not permission to
+  // answer every follow-up; explicit mentions of the bot still use mention.
   async function finishGroupReply(trigger, outcome, route) {
     if (outcome.status !== "replied" || trigger.scope !== "group") {
       return outcome;
@@ -392,6 +391,11 @@ export function createProcessor(env, overrides = {}) {
           : "stage=llm mention failed:",
         error,
       );
+      if (continuation) {
+        // Active-window context is an invitation, not an obligation. If the
+        // decision call fails, do not manufacture a reply to an unclear target.
+        return { status: "llm-failed" };
+      }
       const outcome = await sendAndStore(
         trigger,
         [FALLBACK_MENTION_REPLY],
@@ -401,6 +405,11 @@ export function createProcessor(env, overrides = {}) {
         batchMeta,
       );
       return finishGroupReply(trigger, outcome, route);
+    }
+
+    if (continuation && parseReplyOutput(raw).kind === "silent") {
+      deps.logger.log("Decision: no reply (active continuation)");
+      return { status: "silent" };
     }
 
     const outcome = await sendAndStore(
@@ -526,14 +535,26 @@ export function createProcessor(env, overrides = {}) {
     const mentioned = messages.some(
       (message) => message.wasMentioned === true,
     );
+    const addressedOthers = messages.some(
+      (message) => message.addressedOthers === true,
+    );
+    const quotedOther = messages.some(
+      (message) => message.quotedOther === true,
+    );
     const lastMessage = messages[messages.length - 1];
     // If any message in the batch addressed the bot, the whole batch is
     // treated as addressed and the newest message carries the reply.
-    const trigger = { ...lastMessage, wasMentioned: mentioned };
+    const trigger = {
+      ...lastMessage,
+      wasMentioned: mentioned,
+      addressedOthers,
+      quotedOther,
+      quotedOtherOnly: lastMessage.quotedOtherOnly === true,
+    };
 
     // Active chat: a group the bot just replied in stays warm for a while.
-    // The person the bot was talking to gets the reply path directly; other
-    // members still go through the model decision.
+    // The last speaker gets an active-continuation decision (which may be
+    // silent); other members still go through the normal model decision.
     const activeWindow =
       trigger.scope === "group"
         ? await store.getActiveWindow(conversationId)
@@ -559,6 +580,9 @@ export function createProcessor(env, overrides = {}) {
       conversationId,
       batchId: batch.id,
       mentioned,
+      addressedOthers,
+      quotedOther,
+      speakerContinues,
       activeUntil: activeWindow.until,
       activeSpeaker: activeWindow.speaker,
     });
@@ -580,9 +604,14 @@ export function createProcessor(env, overrides = {}) {
       contentLength: trigger.content.length,
     });
 
+    if (!mentioned && speakerContinues && trigger.quotedOtherOnly) {
+      deps.logger.log("Decision: no reply (quoted other member only)");
+      return { status: "silent" };
+    }
+
     // 贴纸单独成批时不打扰也不花钱（BOT-019）：群里单发一张贴纸又不是在
-    // 跟机器人说话，默认保持沉默；被 @、被引用（走 mention）或处于活跃续聊
-    // （走 active）时仍然正常回复。
+    // 跟机器人说话，默认保持沉默；被 @、被引用机器人（走 mention）或处于
+    // 活跃续聊判断（走 active）时仍然正常参与。
     if (
       route === "autonomous" &&
       messages.every((message) => message.hasSticker === true)

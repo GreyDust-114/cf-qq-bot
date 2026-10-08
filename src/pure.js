@@ -24,6 +24,9 @@ import {
   GROUP_MENTION_HINT,
   GROUP_NO_MENTION_HINT,
   GROUP_CONTINUATION_HINT,
+  GROUP_OTHER_MENTION_HINT,
+  GROUP_OTHER_QUOTE_HINT,
+  GROUP_OTHER_QUOTE_ONLY_HINT,
   STICKER_NOTE,
   groupSummaryPrompt,
   loreMessage,
@@ -1041,6 +1044,17 @@ export function buildGroupMessages(context, incoming, options = {}) {
       text += GROUP_CONTINUATION_HINT;
     }
 
+    if (isCurrent && incoming.wasMentioned !== true) {
+      if (incoming.addressedOthers === true) {
+        text += GROUP_OTHER_MENTION_HINT;
+      }
+      if (incoming.quotedOtherOnly === true) {
+        text += GROUP_OTHER_QUOTE_ONLY_HINT;
+      } else if (incoming.quotedOther === true) {
+        text += GROUP_OTHER_QUOTE_HINT;
+      }
+    }
+
     if (isCurrent && incoming.hasSticker === true) {
       text += `\n${STICKER_NOTE}`;
     }
@@ -1142,6 +1156,19 @@ export function parseIncomingMessage(payload, env) {
         (mention) => mention?.is_you === true,
       ) === true ||
       rich.quotedBot === true;
+    const addressedOthers =
+      message?.mentions?.some(
+        (mention) => mention?.is_you === false,
+      ) === true;
+    const firstElement = Array.isArray(message?.msg_elements)
+      ? message.msg_elements[0]
+      : null;
+    const quotedOther =
+      message?.message_type === 103 && firstElement?.author?.bot === false;
+    const quotedOtherOnly =
+      quotedOther &&
+      !String(message?.content ?? "").trim() &&
+      (message?.attachments?.length ?? 0) === 0;
 
     if (!rich.text && rich.imageUrls.length === 0) {
       if (!wasMentioned) {
@@ -1175,6 +1202,9 @@ export function parseIncomingMessage(payload, env) {
       memberOpenid,
       wasMentioned,
       quotedBot: rich.quotedBot === true,
+      addressedOthers,
+      quotedOther,
+      quotedOtherOnly,
     };
   }
 
