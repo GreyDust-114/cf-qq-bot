@@ -10,6 +10,7 @@
 import {
   ACTIVE_WINDOW_MS,
   INVOCATION_BUDGET_MS,
+  MAX_IMAGES_PER_BATCH,
   MIN_STAGE_BUDGET_MS,
   PART_GAP_MAX_MS,
 } from "./config.js";
@@ -31,6 +32,48 @@ import {
   replyPartGapMs,
   stripTimePrefix,
 } from "./pure.js";
+
+function currentBatchImageCount(trigger) {
+  const entries = Array.isArray(trigger.currentBatchImages)
+    ? trigger.currentBatchImages
+    : [{ imageUrls: trigger.imageUrls }];
+
+  return entries.reduce((total, entry) => {
+    const imageUrls = Array.isArray(entry?.imageUrls) ? entry.imageUrls : [];
+    return total + new Set(imageUrls).size;
+  }, 0);
+}
+
+function selectCurrentBatchImages(messages, targetEventId) {
+  const entries = messages
+    .map((message, index) => ({
+      eventId: message.eventId,
+      index,
+      imageUrls: [...new Set(message.imageUrls ?? [])],
+    }))
+    .filter((entry) => entry.eventId && entry.imageUrls.length > 0);
+  const prioritized = [...entries].sort((left, right) => {
+    if (left.eventId === targetEventId) return -1;
+    if (right.eventId === targetEventId) return 1;
+    return right.index - left.index;
+  });
+  const selected = new Map();
+  let remaining = MAX_IMAGES_PER_BATCH;
+
+  for (const entry of prioritized) {
+    const imageUrls = entry.imageUrls.slice(0, remaining);
+    if (imageUrls.length > 0) selected.set(entry.eventId, imageUrls);
+    remaining -= imageUrls.length;
+    if (remaining === 0) break;
+  }
+
+  return entries
+    .filter((entry) => selected.has(entry.eventId))
+    .map((entry) => ({
+      eventId: entry.eventId,
+      imageUrls: selected.get(entry.eventId),
+    }));
+}
 
 export function createProcessor(env, overrides = {}) {
   const deps = createDependencies(env, overrides);
@@ -312,7 +355,8 @@ export function createProcessor(env, overrides = {}) {
     isCurrent,
     batchMeta,
   ) {
-    const hasImages = trigger.imageUrls.length > 0;
+    const imageCount = currentBatchImageCount(trigger);
+    const hasImages = imageCount > 0;
     let raw;
 
     try {
@@ -320,12 +364,14 @@ export function createProcessor(env, overrides = {}) {
         (includeImages) =>
           buildPrivateMessages(context, trigger, {
             includeImages,
+            currentBatchEventIds: trigger.currentBatchEventIds,
+            currentBatchImages: trigger.currentBatchImages,
             now: deps.now(),
           }),
         {
           maxTokens: 2000,
           label: "private",
-          imageCount: trigger.imageUrls.length,
+          imageCount,
           stickerCount: trigger.hasSticker ? 1 : 0,
         },
         hasImages,
@@ -362,7 +408,8 @@ export function createProcessor(env, overrides = {}) {
     batchMeta,
     continuation = false,
   ) {
-    const hasImages = trigger.imageUrls.length > 0;
+    const imageCount = currentBatchImageCount(trigger);
+    const hasImages = imageCount > 0;
     const route = continuation ? "active" : "mention";
     let raw;
 
@@ -374,12 +421,13 @@ export function createProcessor(env, overrides = {}) {
             continuation,
             includeImages,
             currentBatchEventIds: trigger.currentBatchEventIds,
+            currentBatchImages: trigger.currentBatchImages,
             now: deps.now(),
           }),
         {
           maxTokens: 2000,
           label: continuation ? "active" : "mention",
-          imageCount: trigger.imageUrls.length,
+          imageCount,
           stickerCount: trigger.hasSticker ? 1 : 0,
         },
         hasImages,
@@ -433,7 +481,8 @@ export function createProcessor(env, overrides = {}) {
     isCurrent,
     batchMeta,
   ) {
-    const hasImages = trigger.imageUrls.length > 0;
+    const imageCount = currentBatchImageCount(trigger);
+    const hasImages = imageCount > 0;
     let raw;
 
     try {
@@ -443,12 +492,13 @@ export function createProcessor(env, overrides = {}) {
             decision: true,
             includeImages,
             currentBatchEventIds: trigger.currentBatchEventIds,
+            currentBatchImages: trigger.currentBatchImages,
             now: deps.now(),
           }),
         {
           maxTokens: 1500,
           label: "autonomous",
-          imageCount: trigger.imageUrls.length,
+          imageCount,
           stickerCount: trigger.hasSticker ? 1 : 0,
         },
         hasImages,
@@ -548,6 +598,10 @@ export function createProcessor(env, overrides = {}) {
       currentBatchEventIds: messages
         .map((message) => message.eventId)
         .filter((eventId) => typeof eventId === "string"),
+      currentBatchImages: selectCurrentBatchImages(
+        messages,
+        targetMessage.eventId,
+      ),
       addressedOthers: targetMessage.addressedOthers === true,
       quotedOther: targetMessage.quotedOther === true,
       quotedOtherOnly: targetMessage.quotedOtherOnly === true,

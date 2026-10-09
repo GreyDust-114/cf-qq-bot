@@ -27,6 +27,8 @@ import {
   GROUP_OTHER_MENTION_HINT,
   GROUP_OTHER_QUOTE_HINT,
   GROUP_OTHER_QUOTE_ONLY_HINT,
+  HISTORICAL_IMAGE_PLACEHOLDER,
+  IMAGE_UNAVAILABLE_NOTE,
   STICKER_NOTE,
   groupSummaryPrompt,
   loreMessage,
@@ -865,18 +867,15 @@ export function mergeConsecutiveUserMessages(rows) {
   for (const row of rows) {
     const last = merged[merged.length - 1];
 
+    // Keep each current-batch event separate so its text stays paired with its image URLs.
     if (
       row.role === "user" &&
       last &&
       last.role === "user" &&
       last.sender_name === row.sender_name &&
-      last.currentBatch === row.currentBatch
+      last.currentBatch === row.currentBatch &&
+      row.currentBatch !== true
     ) {
-      if (row.currentBatch === true) {
-        const lastEventIds = last.eventIds ?? [last.event_id];
-        const rowEventIds = row.eventIds ?? [row.event_id];
-        last.eventIds = [...lastEventIds, ...rowEventIds];
-      }
       last.content = `${last.content} ${row.content}`;
       last.event_id = row.event_id;
       last.created_at = row.created_at;
@@ -894,6 +893,58 @@ export function buildImageParts(imageUrls) {
     type: "image_url",
     image_url: { url },
   }));
+}
+
+function uniqueImageUrls(urls) {
+  const values = Array.isArray(urls) ? urls : [];
+  return [...new Set(values.filter((url) => typeof url === "string" && url))];
+}
+
+function markHistoricalImagePlaceholders(text) {
+  return String(text ?? "").replaceAll("【图片】", HISTORICAL_IMAGE_PLACEHOLDER);
+}
+
+function annotateCurrentImageContent(text, imageUrls, includeImages) {
+  const source = String(text ?? "");
+  const hasPlaceholder = source.includes("【图片】");
+  const content = source
+    .replaceAll("【图片】", "")
+    .replace(/[ \t]+\n/g, "\n")
+    .trim();
+  const imageCount = uniqueImageUrls(imageUrls).length;
+
+  if (includeImages && imageCount > 0) {
+    return `${content}${content ? "\n" : ""}【随附图片：${imageCount}张】`;
+  }
+
+  if (imageCount > 0 || hasPlaceholder) {
+    return (
+      `${content}${content ? "\n" : ""}【图片暂不可见】\n` +
+      IMAGE_UNAVAILABLE_NOTE
+    );
+  }
+
+  return content;
+}
+
+function imageUrlsByEventId(entries, incoming) {
+  const map = new Map();
+  const source = Array.isArray(entries) ? entries.slice() : [];
+
+  if (incoming?.eventId && incoming.imageUrls?.length) {
+    source.push({ eventId: incoming.eventId, imageUrls: incoming.imageUrls });
+  }
+
+  for (const entry of source) {
+    if (!entry?.eventId) continue;
+    const urls = Array.isArray(entry.imageUrls) ? entry.imageUrls : [];
+    map.set(
+      entry.eventId,
+      uniqueImageUrls([...(map.get(entry.eventId) ?? []), ...urls]),
+    );
+  }
+
+  return map;
 }
 
 // 消息顺序是缓存键的一部分：静态块（人设 → 资料库 → 摘要 → 协议提醒）排在
@@ -931,31 +982,55 @@ export function buildPrivateMessages(context, incoming, options = {}) {
 
   messages.push({ role: "system", content: PROTOCOL_REMINDER_REPLY });
 
-  const history = mergeConsecutiveUserMessages(context.messages);
+  const currentBatchEventIds = new Set(
+    options.currentBatchEventIds ?? [incoming.eventId],
+  );
+  const batchImages = imageUrlsByEventId(options.currentBatchImages, incoming);
+  const history = mergeConsecutiveUserMessages(
+    context.messages.map((row) =>
+      row.role === "user"
+        ? {
+            ...row,
+            currentBatch: currentBatchEventIds.has(row.event_id),
+          }
+        : row,
+    ),
+  );
 
   history.forEach((row) => {
     const role = row.role === "assistant" ? "assistant" : "user";
     const isCurrent =
       row.role === "user" && row.event_id === incoming.eventId;
-    const line =
+    const isCurrentBatch = row.role === "user" && row.currentBatch === true;
+    const imageUrls = isCurrentBatch
+      ? (batchImages.get(row.event_id) ?? [])
+      : [];
+    const canSeeImages = options.includeImages !== false && imageUrls.length > 0;
+    const rowText =
       row.role === "assistant"
         ? row.content
-        : `[${formatMessageTime(row.created_at)}] ${row.content}`;
-    const text =
+        : `[${formatMessageTime(row.created_at)}] ` +
+          (isCurrentBatch
+            ? row.content
+            : markHistoricalImagePlaceholders(row.content));
+    let text =
       isCurrent && incoming.hasSticker === true
-        ? `${line}\n${STICKER_NOTE}`
-        : line;
+        ? `${rowText}\n${STICKER_NOTE}`
+        : rowText;
+    if (isCurrentBatch) {
+      text = annotateCurrentImageContent(
+        text,
+        imageUrls,
+        options.includeImages !== false,
+      );
+    }
 
-    if (
-      isCurrent &&
-      options.includeImages !== false &&
-      incoming.imageUrls?.length
-    ) {
+    if (canSeeImages) {
       messages.push({
         role,
         content: [
           { type: "text", text },
-          ...buildImageParts(incoming.imageUrls),
+          ...buildImageParts(imageUrls),
         ],
       });
       return;
@@ -965,9 +1040,20 @@ export function buildPrivateMessages(context, incoming, options = {}) {
   });
 
   if (history.length === 0) {
+    const imageUrls = batchImages.get(incoming.eventId) ?? [];
+    const canSeeImages = options.includeImages !== false && imageUrls.length > 0;
+    let text = incoming.content || "【图片】";
+    text = annotateCurrentImageContent(
+      text,
+      imageUrls,
+      options.includeImages !== false,
+    );
+
     messages.push({
       role: "user",
-      content: incoming.content || "【图片】",
+      content: canSeeImages
+        ? [{ type: "text", text }, ...buildImageParts(imageUrls)]
+        : text,
     });
   }
 
@@ -1029,6 +1115,7 @@ export function buildGroupMessages(context, incoming, options = {}) {
   const currentBatchEventIds = new Set(
     options.currentBatchEventIds ?? [incoming.eventId],
   );
+  const batchImages = imageUrlsByEventId(options.currentBatchImages, incoming);
   const history = mergeConsecutiveUserMessages(
     context.messages.map((row) =>
       row.role === "user"
@@ -1050,14 +1137,25 @@ export function buildGroupMessages(context, incoming, options = {}) {
     }
 
     const isCurrent =
-      row.currentBatch === true &&
-      (row.event_id === incoming.eventId ||
-        row.eventIds?.includes(incoming.eventId) === true);
+      row.currentBatch === true && row.event_id === incoming.eventId;
+    const imageUrls =
+      row.currentBatch === true ? (batchImages.get(row.event_id) ?? []) : [];
+    const canSeeImages = options.includeImages !== false && imageUrls.length > 0;
     let text =
       `${row.currentBatch ? "【当前批次】 " : ""}` +
       `${isCurrent ? "【本轮目标】 " : ""}` +
       `[${formatMessageTime(row.created_at)}] ` +
       `[${row.sender_name || "群成员"}] ${row.content}`;
+
+    if (row.currentBatch !== true && text.includes("【图片】")) {
+      text = markHistoricalImagePlaceholders(text);
+    } else if (row.currentBatch === true) {
+      text = annotateCurrentImageContent(
+        text,
+        imageUrls,
+        options.includeImages !== false,
+      );
+    }
 
     if (isCurrent && decision) {
       text += incoming.wasMentioned
@@ -1082,16 +1180,12 @@ export function buildGroupMessages(context, incoming, options = {}) {
       text += `\n${STICKER_NOTE}`;
     }
 
-    if (
-      isCurrent &&
-      options.includeImages !== false &&
-      incoming.imageUrls?.length
-    ) {
+    if (canSeeImages) {
       messages.push({
         role: "user",
         content: [
           { type: "text", text },
-          ...buildImageParts(incoming.imageUrls),
+          ...buildImageParts(imageUrls),
         ],
       });
       return;
@@ -1101,11 +1195,22 @@ export function buildGroupMessages(context, incoming, options = {}) {
   });
 
   if (history.length === 0) {
+    const imageUrls = batchImages.get(incoming.eventId) ?? [];
+    const canSeeImages = options.includeImages !== false && imageUrls.length > 0;
+    let text =
+      `【当前批次】 【本轮目标】 [${incoming.senderName || "群成员"}] ` +
+      (incoming.content || "【图片】");
+    text = annotateCurrentImageContent(
+      text,
+      imageUrls,
+      options.includeImages !== false,
+    );
+
     messages.push({
       role: "user",
-      content:
-        `【当前批次】 【本轮目标】 [${incoming.senderName || "群成员"}] ` +
-        (incoming.content || "【图片】"),
+      content: canSeeImages
+        ? [{ type: "text", text }, ...buildImageParts(imageUrls)]
+        : text,
     });
   }
 

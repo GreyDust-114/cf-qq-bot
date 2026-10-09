@@ -64,6 +64,7 @@ export const SEND_TIMEOUT_MS = 8 * 1000;
 export const SEND_RETRY_TIMEOUT_MS = 4 * 1000;
 
 export const MAX_IMAGES_PER_MESSAGE = 4;
+export const MAX_IMAGES_PER_BATCH = 4;
 export const MAX_IMAGE_BYTES = 20 * 1024 * 1024;
 export const MAX_IMAGE_URL_LENGTH = 8192;
 export const MAX_FACE_EXT_BYTES = 64 * 1024;

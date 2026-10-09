@@ -33,7 +33,7 @@ QQ AI Bot is running.
 | `stage=outbox failed part=N` | 确定性失败 |
 | `stage=outbox uncertain part=N` | 发送结果不确定，不自动重发 |
 | `stage=llm ok in Xms` | 模型耗时 |
-| `stage=usage request=…` | 每次模型调用的 token 用量：`prompt` / `hit` / `miss` / `out` / `thinking` / `images` / `stickers` / `finish` / `ms`；`request` 为路由标签（`private` / `mention` / `active` / `autonomous` / `memory`），视觉回退时带 `+no-images`；空正文的失败调用同样记一行 |
+| `stage=usage request=…` | 每次模型调用的 token 用量：`prompt` / `hit` / `miss` / `out` / `thinking` / `images` / `stickers` / `finish` / `ms`；`images` 计当前批次实际送入的 image_url 数量，`request` 为路由标签（`private` / `mention` / `active` / `autonomous` / `memory`），视觉回退时带 `+no-images`；空正文的失败调用同样记一行 |
 | `stage=memory conversation=…` | 长期记忆整理的单段结果：`messages` / `from`-`to` / `until`（推进后的水位线）/ `delete_before`（实际可删边界，受保留期约束）/ `digest` / `profile` 字符数 / `deleted` 条数 / `dry_run` |
 | `stage=memory done …` | 单次整理批次汇总：涉及会话数、块数、消息数、删除数、`failures`、`dry_run`、耗时 |
 | `stage=memory failed` | 单段整理失败（模型或写入）；原文保留，下次重试 |
@@ -89,6 +89,14 @@ QQ AI Bot is running.
 
 查看 `trimmed-total` 告警与 `MAX_REPLY_TOTAL_CHARS`；提示词用于软引导，解析层硬预算用于兜底。
 
+### 批次图片错配或回复声称看见图片
+
+- `Incoming message:` 的 `images` 是单条入站消息计数；`stage=usage` 的 `images` 是本次模型调用实际携带的批次图片数（上限 4）。成功视觉输入在本地构造的对应消息中标注 `【随附图片：N张】`；批次超限时目标消息优先、其余按最近消息优先，未入选图片改标不可见。vision失败后的纯文本重试应带 `+no-images`，输入改标 `【图片暂不可见】`（若剩余调用预算足够）。
+- 这些消息正文不会为了排错而写入运行日志；核对具体图文关联时用脱敏本地测试构造的 prompt，不复制真实聊天内容。
+- D1 历史只保留图片占位，不保留原图；历史上下文中的 `【历史图片占位：原图不可见】` 不能证明机器人看到了旧图，也不能据此判断旧图识别是否正确。
+- 排查批次错配时，用本地脱敏用例核对每个 user message 的图片 URL 与对应文本是否在同一事件边界；使用用户提供或自造的可验证图片做识图质量核验，不向真实 QQ 会话发送测试消息。
+- 查看 `test/processing.test.js` 的批次、多图上限、失败和超时用例；不要把真实消息正文、图片 URL 或模型密钥写入日志、评测报告或提交。
+
 ### 命中内部控制语守卫
 
 `internal-control` 是有限的高置信规则，不是任意自然语言分类器。先根据日志中的 `route` 与 `rule` 用自造输入在 `test/parsing.test.js`、`test/processing.test.js` 复现；不要为了排查把模型原始输出或真实聊天正文加入日志。若确认误伤正常语句，新增最小对照用例再调整规则；若有未覆盖措辞，也先加脱敏测试，不直接扩大到关键词屏蔽。
@@ -106,5 +114,5 @@ QQ AI Bot is running.
 
 - 原始上下文窗口 72 小时 / 400 条 / 6 万字符；窗口外的内容由每日整理出的画像与 digest 承担（删除默认关闭，先 dry_run）
 - 不支持发送贴纸与网络搜索；入站贴纸按情绪语义处理（正文写成 `【贴纸】` / `【贴纸:名字】`，图不进上下文）
-- 图片只在当前消息内识别，历史仅保存占位描述
+- 图片只在当前批次内随各自消息送入视觉模型（单条最多 4 个去重 URL、每次调用总计最多 4 张；单图不超过 20 MiB）；历史仅保存占位描述。vision失败或超时会在预算允许时退化为纯文本并明确标注图片不可见
 - `uncertain` 不会自动重发，需要人工确认后使用同一 msg_seq 恢复
