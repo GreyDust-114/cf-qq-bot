@@ -37,6 +37,7 @@ QQ AI Bot is running.
 | `stage=memory conversation=…` | 长期记忆整理的单段结果：`messages` / `from`-`to` / `until`（推进后的水位线）/ `delete_before`（实际可删边界，受保留期约束）/ `digest` / `profile` 字符数 / `deleted` 条数 / `dry_run` |
 | `stage=memory done …` | 单次整理批次汇总：涉及会话数、块数、消息数、删除数、`failures`、`dry_run`、耗时 |
 | `stage=memory failed` | 单段整理失败（模型或写入）；原文保留，下次重试 |
+| `stage=memory restructure skipped reason=budget` | 剩余 cron 预算不足以开始可选的画像重排；跳过额外模型调用并保留本轮已有画像结果 |
 | `stage=send ok in Xms` | QQ 发送耗时 |
 
 ## outbox 判定

@@ -24,6 +24,7 @@ import {
   MEMORY_PROFILE_MAX_CHARS,
   MEMORY_PROFILE_SECTIONS,
   MEMORY_RETENTION_MS,
+  MIN_STAGE_BUDGET_MS,
   MEMORY_TIMEOUT_MS,
 } from "./config.js";
 
@@ -117,6 +118,13 @@ export function createMemoryRunner(deps) {
 
   // 旧画像不是小节结构时，单独调一次“只重排”；失败就退回合并结果（尽量不阻断整理）。
   async function restructureProfile(profile, deadline) {
+    const remainingMs = deadline - deps.now();
+
+    if (remainingMs < MIN_STAGE_BUDGET_MS) {
+      deps.logger.log("stage=memory restructure skipped reason=budget");
+      return null;
+    }
+
     try {
       const raw = await llm.callDeepSeek(
         [
@@ -132,7 +140,7 @@ export function createMemoryRunner(deps) {
         {
           maxTokens: MEMORY_MAX_TOKENS,
           label: "memory-restructure",
-          timeoutMs: MEMORY_TIMEOUT_MS,
+          timeoutMs: Math.min(MEMORY_TIMEOUT_MS, remainingMs),
           thinking: false,
         },
       );
