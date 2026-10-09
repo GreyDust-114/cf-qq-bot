@@ -537,17 +537,53 @@ export function createStore(deps) {
       .run();
   }
 
+  // 与 deleteMessagesBefore 的口径保持一致：只统计“落在某段 digest 区间内”的
+  // 消息，这样 dry_run 报出来的条数就是真实会被删掉的条数。
   async function countMessagesBefore(conversationId, until) {
     const row = await db()
       .prepare(
         `SELECT COUNT(*) AS n
          FROM messages
-         WHERE conversation_id = ? AND created_at < ?`,
+         WHERE conversation_id = ? AND created_at < ?
+           AND EXISTS (
+             SELECT 1 FROM memory_digests d
+              WHERE d.conversation_id = messages.conversation_id
+                AND d.period_start <= messages.created_at
+                AND messages.created_at <= d.period_end
+           )`,
       )
       .bind(conversationId, until)
       .first();
 
     return Number(row?.n ?? 0);
+  }
+
+  // 已经摘要完、只剩删除的会话：这类会话没有新积压，会被 listConversationsWithBacklog
+  // 漏掉，导致过期原文永远不删（2026-10-09 线上发现：私聊 3 条 09-22 的消息一直留着）。
+  async function listConversationsWithDeletableMessages({ before, limit }) {
+    const { results } = await db()
+      .prepare(
+        `SELECT c.conversation_id, c.kind,
+                COALESCE(c.summarized_until, 0) AS summarized_until
+         FROM conversations c
+         WHERE EXISTS (
+           SELECT 1 FROM messages m
+            WHERE m.conversation_id = c.conversation_id
+              AND m.created_at < MIN(COALESCE(c.summarized_until, 0), ?)
+              AND EXISTS (
+                SELECT 1 FROM memory_digests d
+                 WHERE d.conversation_id = m.conversation_id
+                   AND d.period_start <= m.created_at
+                   AND m.created_at <= d.period_end
+              )
+         )
+         ORDER BY c.summarized_until
+         LIMIT ?`,
+      )
+      .bind(before, limit)
+      .all();
+
+    return results ?? [];
   }
 
   // 删除已压缩的原文。除了水位线，这里再要求「落在某段 digest 区间内」，
@@ -589,6 +625,7 @@ export function createStore(deps) {
     markOutboxAssistant,
     markOutboxFailure,
     listConversationsWithBacklog,
+    listConversationsWithDeletableMessages,
     loadMemoryState,
     loadMemoryBacklog,
     saveMemoryDigest,

@@ -272,6 +272,7 @@ export function memorySystemPrompt({ profileChars, digestChars, sections }) {
   const sectionLines = (sections ?? []).map(
     (section) => `- 「${section.title}」最多 ${section.maxItems} 条`,
   );
+  const profileTargetChars = Math.floor(profileChars * 0.8);
 
   return [
     "你在把群聊机器人读到的一段聊天整理成长期记忆，供机器人以后回忆。",
@@ -287,14 +288,41 @@ export function memorySystemPrompt({ profileChars, digestChars, sections }) {
     "",
     "【画像】按小节组织，顺序与标题照抄（每个小节都要写出标题，一个都不能省）：",
     ...sectionLines,
+    "旧画像如果还不是这种小节结构，就按上面的小节重排一遍，不要沿用旧排版。",
     "同一小节写满时，先删掉最久没再被提到、最不重要的一条，再写新的；",
     "已经不再成立的事实直接删掉，不要留着过时信息。",
-    `（整份画像不超过 ${profileChars} 字）`,
+    `重写后的画像要比上限更短：目标 ≤ ${profileTargetChars} 字（硬上限 ${profileChars} 字）；宁可少写次要内容也不要超。`,
     "",
     "【本期】",
     `（这一段聊天里值得长期保留的要点，条目式，≤${digestChars} 字）`,
     "",
     "两个区块都要写，严格用【画像】【本期】作为标记，不要写其他内容。",
+  ].join("\n");
+}
+
+// 旧画像还是扁平列表时，模型在合并调用里会照抄旧排版（线上与本地都复现过）。
+// 因此单独用一次“只重排”的调用把小节结构立起来，之后增量合并就会沿用。
+export function profileRestructurePrompt({ profile, sections, maxChars }) {
+  const sectionNames = (sections ?? [])
+    .map((section) => `【${section.title}】`)
+    .join("");
+  const sectionLimits = (sections ?? [])
+    .map((section) => `${section.title} ${section.maxItems} 条`)
+    .join("、");
+  const targetChars = Math.floor(maxChars * 0.8);
+
+  return [
+    "把下面的长期画像整理成“短条目 + 固定小节”，只输出整理后的画像本身。",
+    "",
+    "硬性要求：",
+    "1. 条目以「- 」开头，一条只写一个事实，每条不超过 60 字；原文过长的条目必须拆成多条。",
+    `2. 必须写出四个小节标题，顺序：${sectionNames}。`,
+    `3. 同一小节最多：${sectionLimits}；超出时保留更重要、更近的，删掉最久没再提到与已经过时的。`,
+    `4. 全文不超过 ${maxChars} 字，目标 ${targetChars} 字以内。`,
+    "5. 不要输出【画像】【本期】这类外层标记，不要解释。",
+    "",
+    "画像原文：",
+    profile,
   ].join("\n");
 }
 

@@ -32,6 +32,7 @@ import {
   memorySystemPrompt,
   memoryUserPrompt,
   parseMemoryOutput,
+  profileRestructurePrompt,
 } from "./prompts.js";
 import { createStore } from "./store.js";
 
@@ -41,6 +42,21 @@ function clamp(text, maxChars) {
   const value = String(text ?? "").trim();
 
   return value.length > maxChars ? value.slice(0, maxChars) : value;
+}
+
+// 画像超长时按条目边界裁剪：宁可少一条，也不要留半句话（模型偶尔会超上限）。
+export function clampProfile(text, maxChars) {
+  const value = String(text ?? "").trim();
+
+  if (value.length <= maxChars) {
+    return { text: value, trimmed: false };
+  }
+
+  const cut = value.slice(0, maxChars);
+  const lastBreak = cut.lastIndexOf("\n");
+  const kept = lastBreak > maxChars * 0.5 ? cut.slice(0, lastBreak) : cut;
+
+  return { text: kept.trim(), trimmed: true };
 }
 
 // 原文行格式与回复上下文一致：时间与发言人只用于定位，提示词要求不写进结果。
@@ -97,6 +113,57 @@ export function createMemoryRunner(deps) {
     }
 
     return options.compactAfterMs ?? MEMORY_COMPACT_AFTER_MS;
+  }
+
+  // 旧画像不是小节结构时，单独调一次“只重排”；失败就退回合并结果（尽量不阻断整理）。
+  async function restructureProfile(profile, deadline) {
+    try {
+      const raw = await llm.callDeepSeek(
+        [
+          {
+            role: "user",
+            content: profileRestructurePrompt({
+              profile,
+              sections: MEMORY_PROFILE_SECTIONS,
+              maxChars: MEMORY_PROFILE_MAX_CHARS,
+            }),
+          },
+        ],
+        {
+          maxTokens: MEMORY_MAX_TOKENS,
+          label: "memory-restructure",
+          timeoutMs: MEMORY_TIMEOUT_MS,
+          thinking: false,
+        },
+      );
+      const text = clamp(String(raw ?? "").trim(), MEMORY_PROFILE_MAX_CHARS);
+
+      return text.includes(MEMORY_PROFILE_SECTIONS[0].title) ? text : null;
+    } catch (error) {
+      deps.logger.error("stage=memory restructure failed:", error);
+      return null;
+    }
+  }
+
+  // 删除已压缩的原文：边界取 min(水位线, 保留期边界)，再加 digest 覆盖校验。
+  // 有积压的会话在压缩后调用；没有积压、只剩过期的会话也单独调用一次。
+  async function applyDeletion(
+    conversationId,
+    { deleteCutoff, dryRun, summarizedUntil },
+  ) {
+    const watermark =
+      summarizedUntil ?? (await store.loadMemoryState(conversationId)).summarizedUntil;
+    const deleteBefore = Math.min(watermark, deleteCutoff);
+
+    if (deleteBefore <= 0) {
+      return { deleted: 0, deleteBefore: 0 };
+    }
+
+    const deleted = dryRun
+      ? await store.countMessagesBefore(conversationId, deleteBefore)
+      : await store.deleteMessagesBefore(conversationId, deleteBefore);
+
+    return { deleted, deleteBefore };
   }
 
   // 压缩一个会话的一段区间；返回 null 表示没有需要处理的内容。
@@ -172,10 +239,21 @@ export function createMemoryRunner(deps) {
       truncateStoredContent(parsed.digest),
       MEMORY_DIGEST_MAX_CHARS,
     );
-    const profile = clamp(
+    const profileResult = clampProfile(
       truncateStoredContent(parsed.profile),
       MEMORY_PROFILE_MAX_CHARS,
     );
+    let profile = profileResult.text;
+    let restructured = false;
+
+    if (!profile.includes(MEMORY_PROFILE_SECTIONS[0].title)) {
+      const sectioned = await restructureProfile(profile, deadline);
+
+      if (sectioned) {
+        profile = sectioned;
+        restructured = true;
+      }
+    }
 
     if (!digest) {
       return {
@@ -206,15 +284,11 @@ export function createMemoryRunner(deps) {
       summarizedUntil,
     });
 
-    let deleted = 0;
-    // 删除还要再等保留期：水质线可能在压缩期内（保留期更长时）。
-    const deleteBefore = Math.min(summarizedUntil, deleteCutoff);
-
-    if (!dryRun) {
-      deleted = await store.deleteMessagesBefore(conversationId, deleteBefore);
-    } else {
-      deleted = await store.countMessagesBefore(conversationId, deleteBefore);
-    }
+    const { deleted, deleteBefore } = await applyDeletion(conversationId, {
+      deleteCutoff,
+      dryRun,
+      summarizedUntil,
+    });
 
     deps.logger.log(
       `stage=memory conversation=${conversationId} kind=${kind} ` +
@@ -225,6 +299,8 @@ export function createMemoryRunner(deps) {
         `delete_before=${new Date(deleteBefore).toISOString()} ` +
         `digest=${digest.length} profile=${profile.length} ` +
         `deleted=${deleted} dry_run=${dryRun}` +
+        (profileResult.trimmed ? " profile_trimmed=true" : "") +
+        (restructured ? " restructured=true" : "") +
         (parsed.warning ? ` warning=${parsed.warning}` : ""),
     );
 
@@ -237,6 +313,8 @@ export function createMemoryRunner(deps) {
       summarizedUntil,
       digestChars: digest.length,
       profileChars: profile.length,
+      profileTrimmed: profileResult.trimmed,
+      restructured,
       deleted,
       warning: parsed.warning,
     };
@@ -297,9 +375,45 @@ export function createMemoryRunner(deps) {
       before: cutoff,
       limit: MEMORY_MAX_CONVERSATIONS_PER_RUN,
     });
+    const deletable = await store.listConversationsWithDeletableMessages({
+      before: deleteCutoff,
+      limit: MEMORY_MAX_CONVERSATIONS_PER_RUN,
+    });
+
+    const hasBacklog = new Set(
+      conversations.map((conversation) => conversation.conversation_id),
+    );
+    const deleteOnly = deletable.filter(
+      (conversation) => !hasBacklog.has(conversation.conversation_id),
+    );
 
     const results = [];
     let failures = 0;
+
+    for (const conversation of deleteOnly) {
+      const { deleted, deleteBefore } = await applyDeletion(
+        conversation.conversation_id,
+        { deleteCutoff, dryRun },
+      );
+
+      if (deleted > 0 || dryRun) {
+        deps.logger.log(
+          `stage=memory delete-only conversation=${conversation.conversation_id} ` +
+            `kind=${conversation.kind} ` +
+            `delete_before=${new Date(deleteBefore).toISOString()} ` +
+            `deleted=${deleted} dry_run=${dryRun}`,
+        );
+      }
+
+      results.push({
+        conversationId: conversation.conversation_id,
+        kind: conversation.kind,
+        pending: 0,
+        chunks: deleted > 0
+          ? [{ conversationId: conversation.conversation_id, status: dryRun ? "dry-run" : "deleted-only", messages: 0, deleted }]
+          : [],
+      });
+    }
 
     for (const conversation of conversations) {
       const chunks = await compactConversation(
