@@ -138,6 +138,12 @@ const GROUP_DECISION_SCENE = `群聊场景：你在一个热闹的群里，先�
 
 const GROUP_MENTION_SCENE = `群聊场景：有人 @ 了你，必须回复。直接开口就行，不用重新自我介绍。`;
 
+const GROUP_TOPIC_FOCUS = `本轮回应目标与历史边界：
+- 【本轮目标】标记本次要直接回应的消息；当前批次中若有明确 @ 或引用机器人的消息，以最近一条为目标，否则按最新消息与引用关系判断。
+- 【当前批次】标记同一批输入，作为回应目标的上下文；多成员交错时按发言者区分，不把他人的话并入目标。
+- 未明确引用或重提的历史问题只作背景；摘要和长期画像也只作背景，不要因其中有未答问题而在新话题里补答。
+- 当前批次明确引用或重提某段历史时，可以接回该历史话题；引用之外的旧问题不会自动成为目标。`;
+
 const GROUP_CONTINUATION_SCENE = `群聊场景：刚才你在群里和一位群友聊了几句，对方现在又发了消息。
 如果这条仍是在接着和你聊，就直接、自然地回应，不必重新打招呼，也不要刻意 @ 对方或提“刚才那件事”。如果对方明确转向其他群友、表示不需要你参与，或当前对象不明确，可以保持沉默；活跃期不代表每条消息都要回复。`;
 
@@ -151,14 +157,18 @@ function composeSystemPrompt(scene, { allowSilent = false } = {}) {
   );
 }
 
-export const GROUP_SYSTEM_PROMPT = composeSystemPrompt(GROUP_DECISION_SCENE, {
+function composeGroupSystemPrompt(scene, options = {}) {
+  return composeSystemPrompt(`${GROUP_TOPIC_FOCUS}\n\n${scene}`, options);
+}
+
+export const GROUP_SYSTEM_PROMPT = composeGroupSystemPrompt(GROUP_DECISION_SCENE, {
   allowSilent: true,
 });
 
 export const GROUP_MENTION_SYSTEM_PROMPT =
-  composeSystemPrompt(GROUP_MENTION_SCENE);
+  composeGroupSystemPrompt(GROUP_MENTION_SCENE);
 
-export const GROUP_CONTINUATION_SYSTEM_PROMPT = composeSystemPrompt(
+export const GROUP_CONTINUATION_SYSTEM_PROMPT = composeGroupSystemPrompt(
   GROUP_CONTINUATION_SCENE,
   { allowSilent: true },
 );

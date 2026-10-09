@@ -869,8 +869,14 @@ export function mergeConsecutiveUserMessages(rows) {
       row.role === "user" &&
       last &&
       last.role === "user" &&
-      last.sender_name === row.sender_name
+      last.sender_name === row.sender_name &&
+      last.currentBatch === row.currentBatch
     ) {
+      if (row.currentBatch === true) {
+        const lastEventIds = last.eventIds ?? [last.event_id];
+        const rowEventIds = row.eventIds ?? [row.event_id];
+        last.eventIds = [...lastEventIds, ...rowEventIds];
+      }
       last.content = `${last.content} ${row.content}`;
       last.event_id = row.event_id;
       last.created_at = row.created_at;
@@ -1020,7 +1026,19 @@ export function buildGroupMessages(context, incoming, options = {}) {
       : PROTOCOL_REMINDER_REPLY,
   });
 
-  const history = mergeConsecutiveUserMessages(context.messages);
+  const currentBatchEventIds = new Set(
+    options.currentBatchEventIds ?? [incoming.eventId],
+  );
+  const history = mergeConsecutiveUserMessages(
+    context.messages.map((row) =>
+      row.role === "user"
+        ? {
+            ...row,
+            currentBatch: currentBatchEventIds.has(row.event_id),
+          }
+        : row,
+    ),
+  );
 
   history.forEach((row) => {
     if (row.role === "assistant") {
@@ -1031,10 +1049,15 @@ export function buildGroupMessages(context, incoming, options = {}) {
       return;
     }
 
+    const isCurrent =
+      row.currentBatch === true &&
+      (row.event_id === incoming.eventId ||
+        row.eventIds?.includes(incoming.eventId) === true);
     let text =
+      `${row.currentBatch ? "【当前批次】 " : ""}` +
+      `${isCurrent ? "【本轮目标】 " : ""}` +
       `[${formatMessageTime(row.created_at)}] ` +
       `[${row.sender_name || "群成员"}] ${row.content}`;
-    const isCurrent = row.event_id === incoming.eventId;
 
     if (isCurrent && decision) {
       text += incoming.wasMentioned
@@ -1081,7 +1104,7 @@ export function buildGroupMessages(context, incoming, options = {}) {
     messages.push({
       role: "user",
       content:
-        `[${incoming.senderName || "群成员"}] ` +
+        `【当前批次】 【本轮目标】 [${incoming.senderName || "群成员"}] ` +
         (incoming.content || "【图片】"),
     });
   }

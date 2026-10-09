@@ -373,6 +373,7 @@ export function createProcessor(env, overrides = {}) {
             decision: false,
             continuation,
             includeImages,
+            currentBatchEventIds: trigger.currentBatchEventIds,
             now: deps.now(),
           }),
         {
@@ -441,6 +442,7 @@ export function createProcessor(env, overrides = {}) {
           buildGroupMessages(context, trigger, {
             decision: true,
             includeImages,
+            currentBatchEventIds: trigger.currentBatchEventIds,
             now: deps.now(),
           }),
         {
@@ -535,22 +537,23 @@ export function createProcessor(env, overrides = {}) {
     const mentioned = messages.some(
       (message) => message.wasMentioned === true,
     );
-    const addressedOthers = messages.some(
-      (message) => message.addressedOthers === true,
-    );
-    const quotedOther = messages.some(
-      (message) => message.quotedOther === true,
-    );
     const lastMessage = messages[messages.length - 1];
-    // If any message in the batch addressed the bot, the whole batch is
-    // treated as addressed and the newest message carries the reply.
+    // When a batch contains an explicit bot address, keep that event as the
+    // reply target instead of borrowing the final message's author/content.
+    const targetMessage = mentioned
+      ? [...messages].reverse().find((message) => message.wasMentioned === true)
+      : lastMessage;
     const trigger = {
-      ...lastMessage,
-      wasMentioned: mentioned,
-      addressedOthers,
-      quotedOther,
-      quotedOtherOnly: lastMessage.quotedOtherOnly === true,
+      ...targetMessage,
+      currentBatchEventIds: messages
+        .map((message) => message.eventId)
+        .filter((eventId) => typeof eventId === "string"),
+      addressedOthers: targetMessage.addressedOthers === true,
+      quotedOther: targetMessage.quotedOther === true,
+      quotedOtherOnly: targetMessage.quotedOtherOnly === true,
     };
+    const addressedOthers = trigger.addressedOthers;
+    const quotedOther = trigger.quotedOther;
 
     // Active chat: a group the bot just replied in stays warm for a while.
     // The last speaker gets an active-continuation decision (which may be
