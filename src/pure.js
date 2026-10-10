@@ -27,6 +27,8 @@ import {
   GROUP_OTHER_MENTION_HINT,
   GROUP_OTHER_QUOTE_HINT,
   GROUP_OTHER_QUOTE_ONLY_HINT,
+  GROUP_QUOTED_BOT_HINT,
+  GROUP_QUOTED_OTHER_FOCUS_HINT,
   HISTORICAL_IMAGE_PLACEHOLDER,
   IMAGE_UNAVAILABLE_NOTE,
   STICKER_NOTE,
@@ -1174,6 +1176,13 @@ export function buildGroupMessages(context, incoming, options = {}) {
       } else if (incoming.quotedOther === true) {
         text += GROUP_OTHER_QUOTE_HINT;
       }
+    } else if (isCurrent && incoming.quotedOther === true) {
+      // 被 @ 时不能说沉默，但引用的是别人的话题：只答引用之外对机器人说的话。
+      text += GROUP_QUOTED_OTHER_FOCUS_HINT;
+    }
+
+    if (isCurrent && incoming.quotedBot === true) {
+      text += GROUP_QUOTED_BOT_HINT;
     }
 
     if (isCurrent && incoming.hasSticker === true) {
