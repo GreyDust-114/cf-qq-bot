@@ -22,6 +22,8 @@
 | `MEMORY_DRY_RUN` | 变量 | 长期记忆：`"true"` 只报告不删原文，`"false"` 才实际删除 |
 | `MEMORY_RETENTION_DAYS` | 变量 | 长期记忆：原文保留天数（超过的部分先进摘要、再删除） |
 | `MEMORY_COMPACT_AFTER_DAYS` | 变量 | 长期记忆：超过多少天的消息开始压缩（默认 `2`，与保留期无关） |
+| `STICKER_MEDIA_BASE_URL` | 变量 | BOT-021：QQ 服务端可访问的 HTTPS Worker origin，用于短时签名 D1 贴纸图片 URL；未配置时贴纸发送安全失败 |
+| `STICKER_COOLDOWN_MS` | 变量 | BOT-021：同一会话任意贴纸之间的最小间隔，毫秒，默认 `1800000`（30 分钟），最大按 24 小时截断；同一张连续使用始终禁止 |
 
 ## 核心参数
 
@@ -49,6 +51,9 @@
 | `LLM_TIMEOUT_MS` | 12000 | 模型调用上限 |
 | `SEND_TIMEOUT_MS` | 8000 | QQ 单次发送上限 |
 | `MAX_IMAGES_PER_MESSAGE` | 4 | 当前消息图片上限 |
+| `STICKER_MAX_BYTES` | 1572864 | 单张 D1 base64 贴纸图片字节上限（1.5 MiB） |
+| `STICKER_MEDIA_URL_TTL_SECONDS` | 180 | QQ 拉取贴纸资源的签名 URL 有效期 |
+| `STICKER_COOLDOWN_MS` | 1800000 | 每个会话贴纸发送最小间隔（可由环境变量覆盖） |
 | `MEMORY_RETENTION_MS` | 30 天 | 长期记忆：原文保留期（`MEMORY_RETENTION_DAYS` 可覆盖） |
 | `MEMORY_COMPACT_AFTER_MS` | 2 天 | 长期记忆：超过这个时长的消息才值得压缩（`MEMORY_COMPACT_AFTER_DAYS` 可覆盖） |
 | `MEMORY_DRY_RUN_DEFAULT` | true | 长期记忆：默认不删除，只报告 |

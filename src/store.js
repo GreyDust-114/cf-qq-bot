@@ -226,6 +226,82 @@ export function createStore(deps) {
     return Number(result.meta?.last_row_id ?? 0);
   }
 
+  async function loadStickerCatalog() {
+    try {
+      const { results } = await db()
+        .prepare(
+          `SELECT name, tags_json, usage_count
+           FROM sticker_assets
+           WHERE enabled = 1
+           ORDER BY name`,
+        )
+        .all();
+      return (results ?? []).map((row) => {
+        let tags = [];
+        try {
+          const parsed = JSON.parse(row.tags_json ?? "[]");
+          if (Array.isArray(parsed)) {
+            tags = parsed.filter((tag) => typeof tag === "string");
+          }
+        } catch {}
+        return { name: row.name, tags, usageCount: Number(row.usage_count ?? 0) };
+      });
+    } catch (error) {
+      deps.logger.error("sticker catalog read failed:", error);
+      return [];
+    }
+  }
+
+  async function getStickerAsset(name) {
+    try {
+      return await db()
+        .prepare(
+          `SELECT name, mime_type, data_base64, tags_json, usage_count
+           FROM sticker_assets
+           WHERE name = ? AND enabled = 1`,
+        )
+        .bind(name)
+        .first();
+    } catch (error) {
+      deps.logger.error("sticker asset read failed:", error);
+      return null;
+    }
+  }
+
+  async function markStickerUsed(name) {
+    try {
+      await db()
+        .prepare(
+          `UPDATE sticker_assets
+           SET usage_count = usage_count + 1, updated_at = ?
+           WHERE name = ?`,
+        )
+        .bind(deps.now(), name)
+        .run();
+    } catch (error) {
+      // The QQ send is already confirmed; a telemetry counter must not turn it
+      // into a retriable batch failure.
+      deps.logger.error("sticker usage counter update failed:", error);
+    }
+  }
+
+  async function getLastSentSticker(conversationId) {
+    const row = await db()
+      .prepare(
+        `SELECT content, updated_at
+         FROM outbox
+         WHERE conversation_id = ? AND status = 'sent'
+           AND content LIKE '[sticker:%'
+         ORDER BY updated_at DESC, id DESC
+         LIMIT 1`,
+      )
+      .bind(conversationId)
+      .first();
+    if (!row) return null;
+    const match = String(row.content).match(/^\[sticker:([^\]]+)\]$/u);
+    return match ? { name: match[1], usedAt: Number(row.updated_at) } : null;
+  }
+
   // Outbox: one row per generated bubble. Rows are created as pending before
   // the network call, then updated in place so every state change survives a
   // crash. Writes are intentionally not swallowed: a failed write must surface
@@ -614,6 +690,10 @@ export function createStore(deps) {
     setContextAnchor,
     loadRecentDigests,
     loadLore,
+    loadStickerCatalog,
+    getStickerAsset,
+    markStickerUsed,
+    getLastSentSticker,
     storeAssistantMessage,
     getNextAutonomousAt,
     markAutonomousReply,

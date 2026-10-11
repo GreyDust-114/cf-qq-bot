@@ -711,10 +711,21 @@ function mergeToCap(bubbles, maxParts) {
   return result;
 }
 
+export function parseStickerMarker(value) {
+  if (typeof value !== "string") return null;
+  const match = value
+    .trim()
+    .match(/^\[sticker:([\p{L}\p{N}_-]{1,32})\]$/u);
+  return match ? match[1] : null;
+}
+
 function finalizeReplyMessages(items) {
   const dropped = items.some((item) => typeof item !== "string");
   const seen = new Set();
   const modelBubbles = [];
+  let stickerName = null;
+  let stickerPosition = null;
+  let stickerWarning = null;
   let embeddedJson = false;
 
   for (const item of items) {
@@ -730,7 +741,18 @@ function finalizeReplyMessages(items) {
     // is applied.
     for (const part of extracted.parts) {
       for (const line of part.text.split(/\r?\n+/)) {
-        const bubble = mdToPlain(line);
+        const marker = parseStickerMarker(line);
+        if (marker) {
+          if (stickerName === null) {
+            stickerName = marker;
+            stickerPosition = modelBubbles.length;
+          } else stickerWarning = "multiple-stickers";
+          continue;
+        }
+
+        const bubble = mdToPlain(
+          line.replace(/\[sticker:[^\]\r\n]*\]/gu, ""),
+        );
 
         if (!bubble || FENCE_ONLY_LINE.test(bubble)) {
           continue;
@@ -747,8 +769,13 @@ function finalizeReplyMessages(items) {
     }
   }
 
-  if (modelBubbles.length === 0) {
-    return { kind: "empty", messages: [], warning: null, embeddedJson };
+  if (modelBubbles.length === 0 && stickerName === null) {
+    return {
+      kind: "empty",
+      messages: [],
+      warning: stickerWarning,
+      embeddedJson,
+    };
   }
 
   for (const bubble of modelBubbles) {
@@ -768,7 +795,10 @@ function finalizeReplyMessages(items) {
   const split = modelBubbles.flatMap((bubble) =>
     splitLongBubble(bubble, BUBBLE_TARGET_MAX_CHARS),
   );
-  const merged = mergeToCap(split, MAX_REPLY_PARTS);
+  const merged = mergeToCap(
+    split,
+    Math.max(1, MAX_REPLY_PARTS - (stickerName ? 1 : 0)),
+  );
   const trimmedResult = trimToTotalBudget(merged, MAX_REPLY_TOTAL_CHARS);
   const messages = trimmedResult.bubbles.map((bubble) =>
     truncateReply(bubble),
@@ -781,10 +811,9 @@ function finalizeReplyMessages(items) {
     message.replace(/[，,、；;：:]\s*$/, "").trim(),
   );
 
-  return {
-    kind: "messages",
-    messages: normalized,
-    warning: trimmedResult.trimmed
+  const warning =
+    stickerWarning ??
+    (trimmedResult.trimmed
       ? "trimmed-total"
       : merged.length < split.length
         ? "merged-overflow"
@@ -792,7 +821,13 @@ function finalizeReplyMessages(items) {
           ? "embedded-json"
           : dropped
             ? "non-string-bubble"
-            : null,
+            : null);
+
+  return {
+    kind: "messages",
+    messages: normalized,
+    ...(stickerName ? { stickerName, stickerPosition } : {}),
+    warning,
     embeddedJson,
   };
 }
@@ -929,6 +964,30 @@ function annotateCurrentImageContent(text, imageUrls, includeImages) {
   return content;
 }
 
+function stickerCatalogMessage(entries) {
+  const items = (Array.isArray(entries) ? entries : [])
+    .filter(
+      (entry) =>
+        typeof entry?.name === "string" &&
+        /^[\p{L}\p{N}_-]{1,32}$/u.test(entry.name),
+    )
+    .slice(0, 40);
+  if (items.length === 0) return null;
+  const lines = items.map((entry) => {
+    const tags = Array.isArray(entry.tags)
+      ? entry.tags
+          .filter(
+            (tag) =>
+              typeof tag === "string" &&
+              /^[\p{L}\p{N}_ -]{1,24}$/u.test(tag),
+          )
+          .slice(0, 8)
+      : [];
+    return `- ${entry.name}${tags.length ? `（标签：${tags.join("、")}）` : ""}`;
+  });
+  return `可用贴纸目录（仅可选择以下名称，目录外不要编造）：\n${lines.join("\n")}`;
+}
+
 function imageUrlsByEventId(entries, incoming) {
   const map = new Map();
   const source = Array.isArray(entries) ? entries.slice() : [];
@@ -983,6 +1042,8 @@ export function buildPrivateMessages(context, incoming, options = {}) {
   }
 
   messages.push({ role: "system", content: PROTOCOL_REMINDER_REPLY });
+  const stickerCatalog = stickerCatalogMessage(context.stickerCatalog);
+  if (stickerCatalog) messages.push({ role: "system", content: stickerCatalog });
 
   const currentBatchEventIds = new Set(
     options.currentBatchEventIds ?? [incoming.eventId],
@@ -1113,6 +1174,8 @@ export function buildGroupMessages(context, incoming, options = {}) {
       ? PROTOCOL_REMINDER_DECISION
       : PROTOCOL_REMINDER_REPLY,
   });
+  const stickerCatalog = stickerCatalogMessage(context.stickerCatalog);
+  if (stickerCatalog) messages.push({ role: "system", content: stickerCatalog });
 
   const currentBatchEventIds = new Set(
     options.currentBatchEventIds ?? [incoming.eventId],

@@ -12,6 +12,7 @@ import { createDependencies } from "./dependencies.js";
 import { HUB_ENQUEUE_PATH } from "./conversation-hub.js";
 import { createMemoryRunner } from "./memory.js";
 import { parseIncomingMessage } from "./pure.js";
+import { serveStickerMedia } from "./sticker-media.js";
 
 function json(data, status = 200) {
   return new Response(JSON.stringify(data), {
@@ -85,6 +86,10 @@ export function createRuntime(env, overrides = {}) {
 
     if (url.pathname === "/") {
       return new Response("QQ AI Bot is running.");
+    }
+
+    if (url.pathname.startsWith("/media/stickers/")) {
+      return serveStickerMedia(request, deps.env, deps.now());
     }
 
     if (url.pathname !== "/qq/webhook") {

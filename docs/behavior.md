@@ -39,6 +39,16 @@
 
 旧 `NO_REPLY` 和纯文本仍兼容。没有启用 `response_format: json_object`：thinking 模式下曾导致空 messages 和过度沉默。
 
+## 出站贴纸（BOT-021）
+
+模型可在 `messages` 数组中选择一个目录内的 `[sticker:名字]` 独立项；它不是正文文本。处理器将贴纸作为独立气泡发送：先读 D1 base64 图片，通过 180 秒有效的签名 Worker URL 供 QQ `/files` 接口拉取，再以 `msg_type: 7` 和 `media.file_info` 发送。文字与贴纸不会混在同一个 QQ 消息体。
+
+- QQ 群聊 `/v2/groups/{group_openid}/files` 与私聊 `/v2/users/{openid}/files` 分开上传；`file_info` 不跨 scope 复用，暂不缓存
+- 每轮最多一张；同一会话不能连续发送同一张，默认任意贴纸发送间隔 30 分钟，可用 `STICKER_COOLDOWN_MS` 调整。超限时记录 failed/suppressed，不重试刷屏，其他文字气泡仍可发送
+- 上传失败不发送富媒体；发送超时沿用 outbox `uncertain` 状态，不自动重发。历史 assistant 内容记为 `【已发送贴纸:名字】`，不回灌原始协议标记
+- 媒体代理只接受短时 HMAC 签名 GET，图片大小不超过 1.5 MiB，只允许 PNG/JPEG；`STICKER_MEDIA_BASE_URL` 必须指向 QQ 服务端可访问的 HTTPS Worker 地址
+- 素材不随 Git 提交。`tools/import-stickers.mjs` 可把本地 `stickers/` 图片生成 SQL；生成文件含 base64，留在本机。远程 D1 migration/素材写入仍需维护者单独确认
+
 ## 气泡处理
 
 模型回复首先按换行与标点切分；提示词要求通常 1 条、最多 3 条，单条目标约 12 字，单次软预算 20 字（被问到设定时 30 字左右）。

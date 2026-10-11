@@ -21,6 +21,7 @@ export function createReplySender(deps, tokenManager) {
     accessToken,
     timeoutMs,
     msgSeq,
+    fileInfo = null,
   ) {
     const targetType = incoming.scope === "group" ? "groups" : "users";
 
@@ -36,7 +37,8 @@ export function createReplySender(deps, tokenManager) {
       },
       body: JSON.stringify({
         content,
-        msg_type: 0,
+        msg_type: fileInfo ? 7 : 0,
+        ...(fileInfo ? { media: { file_info: fileInfo } } : {}),
         msg_id: incoming.messageId,
         msg_seq: msgSeq,
       }),
@@ -64,6 +66,7 @@ export function createReplySender(deps, tokenManager) {
     deadline,
     msgSeq = 1,
     tokenPromise = null,
+    options = {},
   ) {
     const startedAt = deps.now();
     const remaining = () => Math.max(0, deadline - deps.now());
@@ -105,6 +108,7 @@ export function createReplySender(deps, tokenManager) {
           accessToken,
           timeout,
           msgSeq,
+          options.fileInfo ?? null,
         );
 
         if (result.ok) {
@@ -121,8 +125,8 @@ export function createReplySender(deps, tokenManager) {
 
         deps.logger.error(
           `stage=send http ${result.status} (msg_seq ${msgSeq}, ` +
-            `attempt ${attempt}): ` +
-            result.body.slice(0, 300),
+            `attempt ${attempt})` +
+            (options.fileInfo ? "" : `: ${result.body.slice(0, 300)}`),
         );
 
         return {
@@ -158,5 +162,134 @@ export function createReplySender(deps, tokenManager) {
     return { ok: false, reason: "timeout", uncertain: true, attempts: 2 };
   }
 
-  return { sendMessage };
+  async function uploadImage(incoming, url, deadline, tokenPromise = null) {
+    const startedAt = deps.now();
+    const remaining = () => Math.max(0, deadline - deps.now());
+    try {
+      const mediaUrl = new URL(url);
+      if (
+        mediaUrl.protocol !== "https:" ||
+        mediaUrl.username ||
+        mediaUrl.password
+      ) {
+        return {
+          ok: false,
+          reason: "invalid-media-url",
+          attempts: 0,
+          elapsedMs: 0,
+        };
+      }
+    } catch {
+      return {
+        ok: false,
+        reason: "invalid-media-url",
+        attempts: 0,
+        elapsedMs: 0,
+      };
+    }
+    let accessToken;
+
+    try {
+      accessToken = tokenPromise ? await tokenPromise : null;
+      if (!accessToken) accessToken = await tokenManager.fetchAccessToken();
+    } catch (error) {
+      deps.logger.error("stage=sticker token unavailable for upload:", error);
+      return {
+        ok: false,
+        reason: "token",
+        attempts: 0,
+        elapsedMs: deps.now() - startedAt,
+      };
+    }
+
+    const timeout = Math.min(SEND_TIMEOUT_MS, remaining());
+    if (timeout < MIN_STAGE_BUDGET_MS) {
+      return {
+        ok: false,
+        reason: "budget",
+        attempts: 0,
+        elapsedMs: deps.now() - startedAt,
+      };
+    }
+
+    const targetType = incoming.scope === "group" ? "groups" : "users";
+    const endpoint =
+      `${QQ_API_BASE_URL}/v2/${targetType}/` +
+      `${encodeURIComponent(incoming.targetId)}/files`;
+
+    try {
+      const response = await deps.fetch(endpoint, {
+        method: "POST",
+        headers: {
+          Authorization: `QQBot ${accessToken}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ file_type: 1, url, srv_send_msg: false }),
+        signal: AbortSignal.timeout(timeout),
+      });
+      const body = await response.text();
+      let data = null;
+      try {
+        data = JSON.parse(body);
+      } catch {}
+
+      if (
+        !response.ok ||
+        typeof data?.file_info !== "string" ||
+        !data.file_info
+      ) {
+        deps.logger.error(`stage=sticker upload failed status=${response.status}`);
+        return {
+          ok: false,
+          reason: response.ok ? "invalid-file-info" : "upload-http",
+          status: response.status,
+          attempts: 1,
+          elapsedMs: deps.now() - startedAt,
+        };
+      }
+
+      return {
+        ok: true,
+        fileInfo: data.file_info,
+        ttl: Number(data.ttl ?? 0),
+        attempts: 1,
+        elapsedMs: deps.now() - startedAt,
+      };
+    } catch (error) {
+      deps.logger.error("stage=sticker upload failed:", error);
+      return {
+        ok: false,
+        reason: "upload-network",
+        uncertain: false,
+        attempts: 1,
+        elapsedMs: deps.now() - startedAt,
+      };
+    }
+  }
+
+  function sendMediaMessage(
+    incoming,
+    fileInfo,
+    deadline,
+    msgSeq = 1,
+    tokenPromise = null,
+  ) {
+    if (typeof fileInfo !== "string" || !fileInfo) {
+      return Promise.resolve({
+        ok: false,
+        reason: "invalid-file-info",
+        attempts: 0,
+      });
+    }
+    return sendMessage(
+      incoming,
+      " ",
+      deadline,
+      msgSeq,
+      tokenPromise,
+      { fileInfo },
+    );
+  }
+
+  return { sendMessage, uploadImage, sendMediaMessage };
 }

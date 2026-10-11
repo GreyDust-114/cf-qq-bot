@@ -69,6 +69,20 @@ export const MAX_IMAGE_BYTES = 20 * 1024 * 1024;
 export const MAX_IMAGE_URL_LENGTH = 8192;
 export const MAX_FACE_EXT_BYTES = 64 * 1024;
 
+// 出站贴纸频率（BOT-021），可由 Worker env.STICKER_COOLDOWN_MS 覆盖；
+// 即使配置为 0，处理器仍禁止连续发送同一张。
+export const STICKER_COOLDOWN_MS = 30 * 60 * 1000;
+export const STICKER_MEDIA_URL_TTL_SECONDS = 180;
+export const STICKER_MAX_BYTES = 1_572_864;
+
+export function stickerCooldownMs(env) {
+  const raw = env?.STICKER_COOLDOWN_MS;
+  if (raw == null || String(raw).trim() === "") return STICKER_COOLDOWN_MS;
+  const configured = Number(raw);
+  if (!Number.isFinite(configured) || configured < 0) return STICKER_COOLDOWN_MS;
+  return Math.min(configured, 24 * 60 * 60 * 1000);
+}
+
 export const TOKEN_SETTINGS_KEY = "qq_access_token";
 
 // 长期记忆（BOT-017）：把超过压缩期的原文压成 digest 与画像；删除只发生在

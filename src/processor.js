@@ -13,6 +13,7 @@ import {
   MAX_IMAGES_PER_BATCH,
   MIN_STAGE_BUDGET_MS,
   PART_GAP_MAX_MS,
+  stickerCooldownMs,
 } from "./config.js";
 import { createDependencies } from "./dependencies.js";
 import { createLlmClient } from "./llm.js";
@@ -22,6 +23,7 @@ import {
   FALLBACK_UNSAFE_REPLY,
 } from "./prompts.js";
 import { createReplySender } from "./sender.js";
+import { createStickerMediaUrl } from "./sticker-media.js";
 import { createStore } from "./store.js";
 import { createTokenManager } from "./token.js";
 
@@ -29,6 +31,7 @@ import {
   buildGroupMessages,
   buildPrivateMessages,
   parseReplyOutput,
+  parseStickerMarker,
   replyPartGapMs,
   stripTimePrefix,
 } from "./pure.js";
@@ -106,6 +109,88 @@ export function createProcessor(env, overrides = {}) {
   // plus its own assistant message are written immediately afterwards. A
   // batch re-run skips bubbles that are already sent (stable msg_seq keeps a
   // resend idempotent on the QQ side) and never retries uncertain sends.
+  function stickerHistoryContent(content) {
+    const name = parseStickerMarker(content);
+    return name ? `【已发送贴纸:${name}】` : content;
+  }
+
+  async function sendSticker(trigger, name, deadline, msgSeq, tokenPromise) {
+    const startedAt = deps.now();
+    const asset = await store.getStickerAsset(name);
+    if (!asset) {
+      deps.logger.log(
+        `stage=sticker name=${name} upload_ms=0 result=failed reason=unavailable`,
+      );
+      return { ok: false, reason: "sticker-unavailable", attempts: 0 };
+    }
+
+    const previous = await store.getLastSentSticker(trigger.conversationId);
+    if (previous) {
+      if (previous.name === name) {
+        deps.logger.log(
+          `stage=sticker name=${name} upload_ms=0 result=suppressed reason=consecutive`,
+        );
+        return { ok: false, reason: "sticker-consecutive", attempts: 0 };
+      }
+      const cooldownMs = stickerCooldownMs(deps.env);
+      if (deps.now() - previous.usedAt < cooldownMs) {
+        deps.logger.log(
+          `stage=sticker name=${name} upload_ms=0 result=suppressed reason=cooldown`,
+        );
+        return { ok: false, reason: "sticker-cooldown", attempts: 0 };
+      }
+    }
+
+    let mediaUrl;
+    try {
+      mediaUrl = await createStickerMediaUrl({
+        name,
+        baseUrl: deps.env.STICKER_MEDIA_BASE_URL,
+        secret: deps.env.QQ_APP_SECRET,
+        now: deps.now(),
+      });
+    } catch (error) {
+      deps.logger.error(
+        `stage=sticker name=${name} media URL unavailable:`,
+        error,
+      );
+      deps.logger.log(
+        `stage=sticker name=${name} upload_ms=0 result=failed reason=media-url`,
+      );
+      return { ok: false, reason: "sticker-media-url", attempts: 0 };
+    }
+
+    const uploaded = await sender.uploadImage(
+      trigger,
+      mediaUrl,
+      deadline,
+      tokenPromise,
+    );
+    if (!uploaded.ok) {
+      deps.logger.log(
+        `stage=sticker name=${name} ` +
+          `upload_ms=${uploaded.elapsedMs ?? deps.now() - startedAt} ` +
+          `result=failed reason=${uploaded.reason}`,
+      );
+      return uploaded;
+    }
+
+    const result = await sender.sendMediaMessage(
+      trigger,
+      uploaded.fileInfo,
+      deadline,
+      msgSeq,
+      tokenPromise,
+    );
+    deps.logger.log(
+      `stage=sticker name=${name} upload_ms=${uploaded.elapsedMs} ` +
+        `result=${result.ok ? "sent" : result.uncertain ? "uncertain" : "failed"}` +
+        `${result.reason ? ` reason=${result.reason}` : ""}`,
+    );
+    if (result.ok) await store.markStickerUsed(name);
+    return result;
+  }
+
   async function sendAndStore(
     trigger,
     messages,
@@ -156,7 +241,7 @@ export function createProcessor(env, overrides = {}) {
         if (!existing.assistant_message_id) {
           const assistantId = await store.storeAssistantMessage(
             trigger.conversationId,
-            existing.content,
+            stickerHistoryContent(existing.content),
           );
 
           await store.markOutboxAssistant(
@@ -220,18 +305,27 @@ export function createProcessor(env, overrides = {}) {
         );
       }
 
-      const result = await sender.sendMessage(
-        trigger,
-        parts[index],
-        deadline,
-        partIndex,
-        tokenPromise,
-      );
+      const stickerName = parseStickerMarker(parts[index]);
+      const result = stickerName
+        ? await sendSticker(
+            trigger,
+            stickerName,
+            deadline,
+            partIndex,
+            tokenPromise,
+          )
+        : await sender.sendMessage(
+            trigger,
+            parts[index],
+            deadline,
+            partIndex,
+            tokenPromise,
+          );
 
       if (result.ok) {
         const assistantId = await store.storeAssistantMessage(
           trigger.conversationId,
-          parts[index],
+          stickerHistoryContent(parts[index]),
         );
 
         await store.markOutboxSent(base.batchId, partIndex, {
@@ -266,6 +360,11 @@ export function createProcessor(env, overrides = {}) {
       );
 
       stopped = result.reason ?? "send-failed";
+      if (stickerName && !result.uncertain) {
+        // A rejected or suppressed sticker is an omitted optional bubble;
+        // adjacent text remains independently sendable.
+        continue;
+      }
       break;
     }
 
@@ -312,6 +411,18 @@ export function createProcessor(env, overrides = {}) {
     return outcome;
   }
 
+  function parsedReplyParts(parsed) {
+    const parts = [...(parsed.messages ?? [])];
+    if (parsed.stickerName) {
+      const position = Math.max(
+        0,
+        Math.min(parsed.stickerPosition ?? parts.length, parts.length),
+      );
+      parts.splice(position, 0, `[sticker:${parsed.stickerName}]`);
+    }
+    return parts;
+  }
+
   // Turns the model's raw output into validated bubbles. Invalid or empty
   // structured output falls back to a safe single bubble instead of sending
   // half-parsed JSON; the fallback and any merge are always logged.
@@ -326,7 +437,7 @@ export function createProcessor(env, overrides = {}) {
     }
 
     if (parsed.kind === "messages") {
-      return parsed.messages;
+      return parsedReplyParts(parsed);
     }
 
     if (parsed.kind === "unsafe") {
@@ -530,8 +641,9 @@ export function createProcessor(env, overrides = {}) {
       return { status: "silent" };
     }
 
+    const replyParts = parsedReplyParts(parsed);
     deps.logger.log(
-      `Decision: reply (${parsed.messages.length} bubbles, ` +
+      `Decision: reply (${replyParts.length} bubbles, ` +
         `${parsed.messages.join("").length} chars)`,
     );
 
@@ -550,7 +662,7 @@ export function createProcessor(env, overrides = {}) {
 
     const outcome = await sendAndStore(
       trigger,
-      parsed.messages,
+      replyParts,
       deadline,
       tokenPromise,
       isCurrent,
@@ -577,7 +689,8 @@ export function createProcessor(env, overrides = {}) {
     // Character lore is optional: an empty lore table simply means the
     // prompt runs without the knowledge block.
     const lore = await store.loadLore();
-    const promptContext = { ...session, lore };
+    const stickerCatalog = await store.loadStickerCatalog();
+    const promptContext = { ...session, lore, stickerCatalog };
 
     deps.logger.log(
       `Context loaded: ${session.messages.length} messages, ` +

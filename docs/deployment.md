@@ -53,6 +53,7 @@ npx wrangler d1 migrations apply qq-ai-bot-db --remote
 - `0004_lore.sql`：角色资料库表（内容由维护者本地的语料同步脚本写入，不随仓库分发；表为空时机器人按无人设资料运行）
 - `0005_memory.sql`：长期记忆（`messages.member_openid`、`conversations.summarized_until`、`memory_digests`）
 - `0006_context_anchor.sql`：上下文窗口锚点（`conversations.context_anchor_at`，固定窗口起点以保住前缀缓存）
+- `0007_sticker_assets.sql`：BOT-021 D1 base64 贴纸资源表；部署出站贴纸前必须先应用并导入至少一个素材
 
 ## 变量与机密
 
@@ -65,11 +66,13 @@ npx wrangler secret put LLM_API_KEY
 
 本地复制 `.dev.vars.example` 为 `.dev.vars`，不要提交真实值。
 
-长期记忆开关（非机密变量，写在本地 `wrangler.toml`）：
+非机密运行变量（写在本地 `wrangler.toml`）：
 
 - `MEMORY_DRY_RUN`：`"true"`（默认）只报告不删除；试运行 3 天后改为 `"false"` 才开启删除；
 - `MEMORY_RETENTION_DAYS`：原文保留天数（先 `30`，观察一周后收到 `7`）；删除只发生在这个边界之外；
 - `MEMORY_COMPACT_AFTER_DAYS`：超过多少天的消息开始压缩进 digest（默认 `2`，与保留期无关，保证读窗口之外的内容尽快变成记忆）；
+- `STICKER_MEDIA_BASE_URL`：公网可访问的 Worker HTTPS origin（如 `https://<worker>.workers.dev`），QQ 媒体服务通过短时签名 URL 拉取 D1 图片；
+- `STICKER_COOLDOWN_MS`：每会话贴纸发送间隔（毫秒，默认 1800000）；
 - `[triggers] crons = ["0 20 * * *"]`：北京时间每天 04:00 触发整理（UTC 前一天 20:00）。
 
 长期记忆开闸顺序（先 dry_run、再 30 天保留、最后 7 天）：
@@ -130,6 +133,8 @@ npx wrangler deploy --dry-run --outdir dist
 - `LLM_BASE_URL`
 - `LLM_MODEL`
 - `ALLOWED_GROUP_OPENID`
+- `STICKER_MEDIA_BASE_URL`
+- `STICKER_COOLDOWN_MS`
 
 ## 回滚
 

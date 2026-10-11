@@ -39,6 +39,9 @@ QQ AI Bot is running.
 | `stage=memory failed` | 单段整理失败（模型或写入）；原文保留，下次重试 |
 | `stage=memory restructure skipped reason=budget` | 剩余 cron 预算不足以开始可选的画像重排；跳过额外模型调用并保留本轮已有画像结果 |
 | `stage=send ok in Xms` | QQ 发送耗时 |
+| `stage=sticker name=… upload_ms=… result=sent` | 单独贴纸上传与 `msg_type=7` 发送成功；不会记录图片内容或签名 URL |
+| `stage=sticker … result=suppressed reason=consecutive/cooldown` | 频率限制跳过贴纸，文字气泡仍可独立发送 |
+| `stage=sticker … result=failed reason=…` | 贴纸资源、上传或发送失败；查对应 outbox `failed/uncertain` 行，不能因上传成功就推断图片已发出 |
 
 ## outbox 判定
 
@@ -113,6 +116,7 @@ QQ AI Bot is running.
 ## 已知限制
 
 - 原始上下文窗口 72 小时 / 400 条 / 6 万字符；窗口外的内容由每日整理出的画像与 digest 承担（删除默认关闭，先 dry_run）
-- 不支持发送贴纸与网络搜索；入站贴纸按情绪语义处理（正文写成 `【贴纸】` / `【贴纸:名字】`，图不进上下文）
+- BOT-021 出站贴纸需要先应用 `0007_sticker_assets.sql` 并导入素材；QQ `/files` 通过短时签名 Worker URL 拉取 D1 图片，未配置 `STICKER_MEDIA_BASE_URL` 或素材不可用时安全跳过。`uncertain` 不自动重发
+- 入站贴纸按情绪语义处理（正文写成 `【贴纸】` / `【贴纸:名字】`，图不进上下文）
 - 图片只在当前批次内随各自消息送入视觉模型（单条最多 4 个去重 URL、每次调用总计最多 4 张；单图不超过 20 MiB）；历史仅保存占位描述。vision失败或超时会在预算允许时退化为纯文本并明确标注图片不可见
 - `uncertain` 不会自动重发，需要人工确认后使用同一 msg_seq 恢复
