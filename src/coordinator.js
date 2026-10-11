@@ -97,7 +97,13 @@ export function createCoordinator(options) {
         return { duplicate: true, reason: "stored" };
       }
 
-      const next = enqueueMessage(state, incoming, {
+      // Sticker bytes are never queued in the Durable Object. recordIncoming
+      // has already hashed the URL and persisted only an encrypted short-lived
+      // source reference in D1 for the owner review path.
+      const queuedIncoming = { ...incoming };
+      delete queuedIncoming.stickerImageUrl;
+      delete queuedIncoming.stickerFingerprint;
+      const next = enqueueMessage(state, queuedIncoming, {
         nowMs: now(),
         random,
       });

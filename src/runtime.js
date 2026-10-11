@@ -13,6 +13,7 @@ import { HUB_ENQUEUE_PATH } from "./conversation-hub.js";
 import { createMemoryRunner } from "./memory.js";
 import { parseIncomingMessage } from "./pure.js";
 import { serveStickerMedia } from "./sticker-media.js";
+import { fetchStickerFingerprint } from "./stickers.js";
 
 function json(data, status = 200) {
   return new Response(JSON.stringify(data), {
@@ -66,6 +67,20 @@ export function createRuntime(env, overrides = {}) {
 
     if (!incoming) {
       return null;
+    }
+
+    if (incoming.hasSticker && incoming.stickerImageUrl) {
+      const result = await fetchStickerFingerprint(
+        incoming.stickerImageUrl,
+        deps.fetch,
+      );
+      if (result.ok) {
+        incoming.stickerFingerprint = result.fingerprint;
+      } else {
+        deps.logger.log(
+          `stage=sticker fingerprint skipped reason=${result.reason}`,
+        );
+      }
     }
 
     deps.logger.log("Incoming message:", {

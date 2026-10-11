@@ -42,6 +42,7 @@ QQ AI Bot is running.
 | `stage=sticker name=… upload_ms=… result=sent` | 单独贴纸上传与 `msg_type=7` 发送成功；不会记录图片内容或签名 URL |
 | `stage=sticker … result=suppressed reason=consecutive/cooldown` | 频率限制跳过贴纸，文字气泡仍可独立发送 |
 | `stage=sticker … result=failed reason=…` | 贴纸资源、上传或发送失败；查对应 outbox `failed/uncertain` 行，不能因上传成功就推断图片已发出 |
+| `stage=sticker-review id=… result=sent` | owner 主动私聊拉取的一张待确认贴纸已通过被动 C2C 回复发送；日志只含指纹短 ID，不含 URL/图片内容 |
 
 ## outbox 判定
 
@@ -116,7 +117,7 @@ QQ AI Bot is running.
 ## 已知限制
 
 - 原始上下文窗口 72 小时 / 400 条 / 6 万字符；窗口外的内容由每日整理出的画像与 digest 承担（删除默认关闭，先 dry_run）
-- BOT-021 出站贴纸需要先应用 `0007_sticker_assets.sql` 并导入素材；QQ `/files` 通过短时签名 Worker URL 拉取 D1 图片，未配置 `STICKER_MEDIA_BASE_URL` 或素材不可用时安全跳过。`uncertain` 不自动重发
+- BOT-020/021 贴纸功能需联合应用 `0007`～`0009` migration、配置素材和 `STICKER_OWNER_OPENID`；D1 只保存 SHA-256/标签和加密短期源 URL，不保存入站原图。owner 需先私聊发“待确认贴纸”；QQ C2C 主动推送自 2025-04-21 起已停用。BOT-021 出站上传通过短时签名 Worker URL；素材不可用时安全跳过，`uncertain` 不自动重发
 - 入站贴纸按情绪语义处理（正文写成 `【贴纸】` / `【贴纸:名字】`，图不进上下文）
 - 图片只在当前批次内随各自消息送入视觉模型（单条最多 4 个去重 URL、每次调用总计最多 4 张；单图不超过 20 MiB）；历史仅保存占位描述。vision失败或超时会在预算允许时退化为纯文本并明确标注图片不可见
 - `uncertain` 不会自动重发，需要人工确认后使用同一 msg_seq 恢复

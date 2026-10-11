@@ -21,7 +21,7 @@
 - 每日长期记忆整理：超过压缩期的原文压成区间摘要与长期画像，原文删除默认 dry-run
 - `pending / sent / failed / uncertain` 可靠发送状态
 - 图片消息、多模态失败回退与正文格式清理
-- 出站贴纸目录选择、短时签名 D1 媒体代理与独立富媒体气泡（BOT-021；生产启用需先应用迁移并导入素材）
+- 贴纸 SHA-256 语义库与 owner 私聊确认、出站贴纸目录选择和独立富媒体气泡（BOT-020/021 联合；生产启用需明确授权迁移、导入素材并联合灰度）
 
 ## 架构概览
 
@@ -68,7 +68,7 @@ npx wrangler d1 migrations apply qq-ai-bot-db --remote
 npm run deploy
 ```
 
-部署前需要在本地 `wrangler.toml` 配置 D1、QQ AppID、模型和灰度群。完整步骤见 [部署文档](docs/deployment.md)。
+部署前需要在本地 `wrangler.toml` 配置 D1、QQ AppID、模型和灰度群。**远程 D1 migration 必须取得维护者明确授权**，Worker 部署授权不自动包含 migration；BOT-020/021 贴纸功能需联合发布。完整步骤见 [部署文档](docs/deployment.md)。
 
 ## 仓库范围
 

@@ -139,6 +139,12 @@ QQ access token 与过期时间。
 
 按区间保存的整理结果（`0005_memory.sql`）：`conversation_id` + `period_start` 为主键，`period_end`、`kind`、`content`、`message_count`。群聊与私聊严格按 `conversation_id` 隔离；主键同时保证同一区间重复运行不会写出第二份。
 
+### sticker_semantics / sticker_assets
+
+`sticker_semantics`（0008）以 SHA-256 作为入站贴纸指纹，保存 pending/asked/confirmed/ignored 状态、owner 确认的 label/note 与见过次数；图片字节只短暂驻留 Worker 内存。为 owner 主动拉取待确认项，最多保留 24 小时有效的 AES-GCM 加密 QQ 源 URL，发送成功后清除；过期项不可再取用，并在下一次 owner 拉取时清理，不进入 `messages` / 模型上下文。
+
+`sticker_assets`（0007/0009）保存维护者获准的出站 base64 素材、名称、标签、用途 note 和同一 SHA-256。两表以指纹连接：素材可作为已知入站标签，owner 确认的语义也用于出站目录。owner review 只能由配置的 C2C openid 私聊命令触发；机器人不尝试已停用的主动 C2C 推送。
+
 ### outbox
 
 每个生成气泡一行，唯一键为 `(batch_id, part_index)`：

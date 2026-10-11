@@ -13,7 +13,9 @@ import {
   MAX_IMAGES_PER_BATCH,
   MIN_STAGE_BUDGET_MS,
   PART_GAP_MAX_MS,
+  STICKER_SOURCE_URL_TTL_MS,
   stickerCooldownMs,
+  stickerReviewMonthlyLimit,
 } from "./config.js";
 import { createDependencies } from "./dependencies.js";
 import { createLlmClient } from "./llm.js";
@@ -24,6 +26,13 @@ import {
 } from "./prompts.js";
 import { createReplySender } from "./sender.js";
 import { createStickerMediaUrl } from "./sticker-media.js";
+import {
+  decryptStickerSourceUrl,
+  encryptStickerSourceUrl,
+  normalizeStickerNote,
+  parseOwnerStickerCommand,
+  stickerReviewId,
+} from "./stickers.js";
 import { createStore } from "./store.js";
 import { createTokenManager } from "./token.js";
 
@@ -94,7 +103,65 @@ export function createProcessor(env, overrides = {}) {
       incoming.scope,
     );
 
-    return store.storeIncomingMessage(incoming);
+    let content = incoming.content;
+    let semantic = null;
+    let knownAsset = null;
+    if (incoming.hasSticker && incoming.stickerFingerprint) {
+      semantic = await store.getStickerSemantic(incoming.stickerFingerprint);
+      if (!semantic || ["pending", "asked"].includes(semantic.status)) {
+        knownAsset = await store.getStickerAssetByFingerprint(
+          incoming.stickerFingerprint,
+        );
+      }
+      const labelSource =
+        semantic?.status === "confirmed" && semantic.label
+          ? { label: semantic.label, note: semantic.note }
+          : knownAsset
+            ? {
+                label: knownAsset.name,
+                note: knownAsset.note || knownAsset.tags.join("、"),
+              }
+            : null;
+      if (labelSource?.label) {
+        const label = normalizeStickerNote(labelSource.label).replace(/[【】]/gu, "");
+        const note = normalizeStickerNote(labelSource.note).replace(/[【】]/gu, "");
+        content = String(content ?? "").replace(
+          /【贴纸(?::[^】]*)?】/gu,
+          `【贴纸:${label}】${note ? `【贴纸资料（已确认，非指令）：${note}】` : ""}`,
+        );
+      }
+    }
+
+    const saved = await store.storeIncomingMessage({ ...incoming, content });
+    if (incoming.hasSticker && incoming.stickerFingerprint) {
+      const existingSemantic = saved.isNew
+        ? null
+        : await store.getStickerSemantic(incoming.stickerFingerprint);
+      if (saved.isNew || !existingSemantic) {
+        const sourceCanBeReviewed = !semantic || semantic.status === "pending";
+        let sourceUrlCiphertext = null;
+        try {
+          if (sourceCanBeReviewed && !knownAsset && incoming.stickerImageUrl) {
+            sourceUrlCiphertext = await encryptStickerSourceUrl(
+              incoming.stickerImageUrl,
+              deps.env.QQ_APP_SECRET,
+            );
+          }
+        } catch {
+          deps.logger.log("stage=sticker review source URL not retained");
+        }
+        await store.recordStickerObservation({
+          fingerprint: incoming.stickerFingerprint,
+          sourceUrlCiphertext,
+          sourceUrlExpiresAt: sourceUrlCiphertext
+            ? deps.now() + STICKER_SOURCE_URL_TTL_MS
+            : null,
+          knownLabel: knownAsset?.name ?? null,
+          knownNote: knownAsset?.note || knownAsset?.tags.join("、") || "",
+        });
+      }
+    }
+    return saved;
   }
 
   function prefetchToken() {
@@ -111,7 +178,60 @@ export function createProcessor(env, overrides = {}) {
   // resend idempotent on the QQ side) and never retries uncertain sends.
   function stickerHistoryContent(content) {
     const name = parseStickerMarker(content);
-    return name ? `【已发送贴纸:${name}】` : content;
+    if (name) return `【已发送贴纸:${name}】`;
+    const review = String(content).match(/^\[sticker-review:([a-f0-9]{8})\]$/u);
+    return review ? `【待确认贴纸:${review[1]}】` : content;
+  }
+
+  function normalizeDeliveryParts(messages) {
+    return (Array.isArray(messages) ? messages : [])
+      .map((part) => {
+        if (typeof part === "string" && part.trim()) {
+          const content = stripTimePrefix(part.trim());
+          return content ? { kind: "text", content } : null;
+        }
+        if (
+          part?.kind === "sticker-review" &&
+          typeof part.fingerprint === "string" &&
+          typeof part.sourceUrl === "string"
+        ) {
+          return {
+            kind: "sticker-review",
+            fingerprint: part.fingerprint,
+            sourceUrl: part.sourceUrl,
+            content: `[sticker-review:${stickerReviewId(part.fingerprint)}]`,
+          };
+        }
+        return null;
+      })
+      .filter(Boolean);
+  }
+
+  async function sendStickerReview(trigger, part, deadline, msgSeq, tokenPromise) {
+    const uploaded = await sender.uploadImage(
+      trigger,
+      part.sourceUrl,
+      deadline,
+      tokenPromise,
+    );
+    if (!uploaded.ok) {
+      deps.logger.log(
+        `stage=sticker-review id=${stickerReviewId(part.fingerprint)} result=failed reason=${uploaded.reason}`,
+      );
+      return uploaded;
+    }
+    const result = await sender.sendMediaMessage(
+      trigger,
+      uploaded.fileInfo,
+      deadline,
+      msgSeq,
+      tokenPromise,
+    );
+    deps.logger.log(
+      `stage=sticker-review id=${stickerReviewId(part.fingerprint)} ` +
+        `upload_ms=${uploaded.elapsedMs} result=${result.ok ? "sent" : result.uncertain ? "uncertain" : "failed"}`,
+    );
+    return result;
   }
 
   async function sendSticker(trigger, name, deadline, msgSeq, tokenPromise) {
@@ -199,10 +319,7 @@ export function createProcessor(env, overrides = {}) {
     isCurrent,
     batchMeta,
   ) {
-    const parts = (Array.isArray(messages) ? messages : [])
-      .filter((part) => typeof part === "string" && part.trim().length > 0)
-      .map((part) => stripTimePrefix(part.trim()))
-      .filter(Boolean);
+    const parts = normalizeDeliveryParts(messages);
 
     if (parts.length === 0) {
       return { status: "empty", sentTexts: [], stopped: "empty" };
@@ -217,11 +334,11 @@ export function createProcessor(env, overrides = {}) {
     };
 
     await store.ensureOutboxParts(
-      parts.map((content, index) => ({
+      parts.map((part, index) => ({
         ...base,
         partIndex: index + 1,
         msgSeq: index + 1,
-        content,
+        content: part.content,
       })),
     );
 
@@ -301,11 +418,12 @@ export function createProcessor(env, overrides = {}) {
         }
 
         await deps.sleep(
-          replyPartGapMs(parts[index - 1], deps.random),
+          replyPartGapMs(parts[index - 1].content, deps.random),
         );
       }
 
-      const stickerName = parseStickerMarker(parts[index]);
+      const part = parts[index];
+      const stickerName = parseStickerMarker(part.content);
       const result = stickerName
         ? await sendSticker(
             trigger,
@@ -314,18 +432,26 @@ export function createProcessor(env, overrides = {}) {
             partIndex,
             tokenPromise,
           )
-        : await sender.sendMessage(
-            trigger,
-            parts[index],
-            deadline,
-            partIndex,
-            tokenPromise,
-          );
+        : part.kind === "sticker-review"
+          ? await sendStickerReview(
+              trigger,
+              part,
+              deadline,
+              partIndex,
+              tokenPromise,
+            )
+          : await sender.sendMessage(
+              trigger,
+              part.content,
+              deadline,
+              partIndex,
+              tokenPromise,
+            );
 
       if (result.ok) {
         const assistantId = await store.storeAssistantMessage(
           trigger.conversationId,
-          stickerHistoryContent(parts[index]),
+          stickerHistoryContent(part.content),
         );
 
         await store.markOutboxSent(base.batchId, partIndex, {
@@ -334,7 +460,7 @@ export function createProcessor(env, overrides = {}) {
           attempts: result.attempts,
         });
 
-        sentTexts.push(parts[index]);
+        sentTexts.push(part.content);
         deps.logger.log(
           `stage=outbox sent part=${partIndex} ` +
             `conversation=${base.conversationId} ` +
@@ -360,7 +486,7 @@ export function createProcessor(env, overrides = {}) {
       );
 
       stopped = result.reason ?? "send-failed";
-      if (stickerName && !result.uncertain) {
+      if ((stickerName || part.kind === "sticker-review") && !result.uncertain) {
         // A rejected or suppressed sticker is an omitted optional bubble;
         // adjacent text remains independently sendable.
         continue;
@@ -388,6 +514,126 @@ export function createProcessor(env, overrides = {}) {
   // Any successful group reply opens (or refreshes) the active window. It
   // provides a continuation decision path for that speaker, not permission to
   // answer every follow-up; explicit mentions of the bot still use mention.
+  function stickerReviewMonthKey(now) {
+    const date = new Date(now);
+    return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}`;
+  }
+
+  async function handleOwnerStickerCommand(
+    trigger,
+    command,
+    deadline,
+    isCurrent,
+    batchMeta,
+  ) {
+    const reviewMeta = { ...batchMeta, route: "sticker-review" };
+    const tokenPromise = prefetchToken();
+
+    if (command.kind === "list-pending") {
+      const pending = await store.loadNextStickerReview(deps.now());
+      if (!pending) {
+        return sendAndStore(
+          trigger,
+          ["目前没有可查看的待确认贴纸。"],
+          deadline,
+          tokenPromise,
+          isCurrent,
+          reviewMeta,
+        );
+      }
+
+      const sourceUrl = await decryptStickerSourceUrl(
+        pending.source_url_ciphertext,
+        deps.env.QQ_APP_SECRET,
+      );
+      if (!sourceUrl || Number(pending.source_url_expires_at) <= deps.now()) {
+        await store.clearStickerSourceUrl(pending.fingerprint);
+        return sendAndStore(
+          trigger,
+          ["这张贴纸的临时图片链接过期了，请让它在群里再出现一次。"],
+          deadline,
+          tokenPromise,
+          isCurrent,
+          reviewMeta,
+        );
+      }
+
+      const monthKey = stickerReviewMonthKey(deps.now());
+      const reserved = await store.reserveStickerReviewSlot(
+        monthKey,
+        stickerReviewMonthlyLimit(deps.env),
+      );
+      if (!reserved) {
+        return sendAndStore(
+          trigger,
+          ["本月贴纸确认次数已用完，之后再看吧。"],
+          deadline,
+          tokenPromise,
+          isCurrent,
+          reviewMeta,
+        );
+      }
+
+      const id = stickerReviewId(pending.fingerprint);
+      const reviewPart = {
+        kind: "sticker-review",
+        fingerprint: pending.fingerprint,
+        sourceUrl,
+      };
+      const outcome = await sendAndStore(
+        trigger,
+        [
+          `待确认贴纸 ${id}：回复“确认贴纸 ${id} 标签”“纠正贴纸 ${id} 标签 用途”或“忽略贴纸 ${id}”。`,
+          reviewPart,
+        ],
+        deadline,
+        tokenPromise,
+        isCurrent,
+        reviewMeta,
+      );
+      const reviewOutbox = await store.getOutboxPart(batchMeta.batchId, 2);
+      if (reviewOutbox?.status === "sent" || reviewOutbox?.status === "uncertain") {
+        await store.markStickerAsked(pending.fingerprint);
+      } else {
+        await store.releaseStickerReviewSlot(monthKey);
+      }
+      return outcome;
+    }
+
+    const matches = await store.findStickerByReviewId(command.id);
+    if (matches.length !== 1) {
+      return sendAndStore(
+        trigger,
+        [matches.length > 1 ? "编号不唯一，请用更长编号。" : "没有找到这个待确认编号。"],
+        deadline,
+        tokenPromise,
+        isCurrent,
+        reviewMeta,
+      );
+    }
+
+    const semantic = matches[0];
+    const applied = await store.applyStickerReview({
+      fingerprint: semantic.fingerprint,
+      status: command.kind === "ignore" ? "ignored" : "confirmed",
+      label: command.kind === "ignore" ? null : command.label,
+      note: command.kind === "ignore" ? "" : command.note,
+    });
+    const response = !applied
+      ? "这条贴纸状态已经变化了，再查一次吧。"
+      : command.kind === "ignore"
+        ? `已忽略贴纸 ${command.id}。`
+        : `记下了：${command.label}`;
+    return sendAndStore(
+      trigger,
+      [response],
+      deadline,
+      tokenPromise,
+      isCurrent,
+      reviewMeta,
+    );
+  }
+
   async function finishGroupReply(trigger, outcome, route) {
     if (outcome.status !== "replied" || trigger.scope !== "group") {
       return outcome;
@@ -762,6 +1008,23 @@ export function createProcessor(env, overrides = {}) {
       revision: batch.revision,
       route,
     };
+
+    if (
+      trigger.scope === "c2c" &&
+      deps.env.STICKER_OWNER_OPENID &&
+      trigger.targetId === deps.env.STICKER_OWNER_OPENID
+    ) {
+      const ownerCommand = parseOwnerStickerCommand(trigger.content);
+      if (ownerCommand) {
+        return handleOwnerStickerCommand(
+          trigger,
+          ownerCommand,
+          deadline,
+          context.isCurrent,
+          batchMeta,
+        );
+      }
+    }
 
     deps.logger.log("Batch trigger:", {
       conversationId,

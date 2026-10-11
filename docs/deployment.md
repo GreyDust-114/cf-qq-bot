@@ -53,7 +53,9 @@ npx wrangler d1 migrations apply qq-ai-bot-db --remote
 - `0004_lore.sql`：角色资料库表（内容由维护者本地的语料同步脚本写入，不随仓库分发；表为空时机器人按无人设资料运行）
 - `0005_memory.sql`：长期记忆（`messages.member_openid`、`conversations.summarized_until`、`memory_digests`）
 - `0006_context_anchor.sql`：上下文窗口锚点（`conversations.context_anchor_at`，固定窗口起点以保住前缀缓存）
-- `0007_sticker_assets.sql`：BOT-021 D1 base64 贴纸资源表；部署出站贴纸前必须先应用并导入至少一个素材
+- `0007_sticker_assets.sql`：BOT-021 D1 base64 贴纸资源表；需与 BOT-020 联合上线
+- `0008_sticker_semantics.sql`：BOT-020 指纹、确认状态与加密短期源 URL 队列
+- `0009_sticker_asset_fingerprint.sql`：把出站素材指纹/用途备注与同一语义库关联
 
 ## 变量与机密
 
@@ -73,6 +75,8 @@ npx wrangler secret put LLM_API_KEY
 - `MEMORY_COMPACT_AFTER_DAYS`：超过多少天的消息开始压缩进 digest（默认 `2`，与保留期无关，保证读窗口之外的内容尽快变成记忆）；
 - `STICKER_MEDIA_BASE_URL`：公网可访问的 Worker HTTPS origin（如 `https://<worker>.workers.dev`），QQ 媒体服务通过短时签名 URL 拉取 D1 图片；
 - `STICKER_COOLDOWN_MS`：每会话贴纸发送间隔（毫秒，默认 1800000）；
+- `STICKER_OWNER_OPENID`：owner 的 C2C openid；owner 必须先私聊拉取待确认贴纸，不能依赖已停用的主动推送；
+- `STICKER_REVIEW_MONTHLY_LIMIT`：每月 owner 主动拉取的图片回复上限，默认 2；
 - `[triggers] crons = ["0 20 * * *"]`：北京时间每天 04:00 触发整理（UTC 前一天 20:00）。
 
 长期记忆开闸顺序（先 dry_run、再 30 天保留、最后 7 天）：
@@ -135,6 +139,8 @@ npx wrangler deploy --dry-run --outdir dist
 - `ALLOWED_GROUP_OPENID`
 - `STICKER_MEDIA_BASE_URL`
 - `STICKER_COOLDOWN_MS`
+- `STICKER_OWNER_OPENID`
+- `STICKER_REVIEW_MONTHLY_LIMIT`
 
 ## 回滚
 

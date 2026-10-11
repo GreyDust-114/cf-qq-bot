@@ -52,6 +52,10 @@ MEMORY_COMPACT_AFTER_DAYS = "2"
 STICKER_MEDIA_BASE_URL = ""
 # Minimum gap between any two sticker sends per conversation (milliseconds).
 STICKER_COOLDOWN_MS = "1800000"
+# QQ C2C openid of the sticker owner (not a group member_openid).
+STICKER_OWNER_OPENID = ""
+# Maximum owner-initiated sticker-review image replies per UTC month.
+STICKER_REVIEW_MONTHLY_LIMIT = "2"
 
 # Long-term memory compaction: 04:00 Beijing time (UTC 20:00 the day before).
 [triggers]

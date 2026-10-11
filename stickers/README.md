@@ -1,6 +1,6 @@
 # 本地贴纸素材（BOT-021）
 
-将获准使用的 PNG/JPEG 素材放在本目录；图片不提交到 Git。文件名默认作为模型可选名称（最多 32 个 Unicode 字母/数字、`_` 或 `-`）。可复制 `manifest.example.json` 为本地 `manifest.json` 配置标签与展示名。
+将获准使用的 PNG/JPEG 素材放在本目录；图片不提交到 Git。文件名默认作为模型可选名称（最多 32 个 Unicode 字母/数字、`_` 或 `-`），导入器计算文件 SHA-256 作为入站语义匹配指纹。可复制 `manifest.example.json` 为本地 `manifest.json` 配置标签与用途 note；只有获准导入的维护者资料会进入出站目录。
 
 ```sh
 node tools/import-stickers.mjs stickers > local/stickers.sql

@@ -230,10 +230,13 @@ export function createStore(deps) {
     try {
       const { results } = await db()
         .prepare(
-          `SELECT name, tags_json, usage_count
-           FROM sticker_assets
-           WHERE enabled = 1
-           ORDER BY name`,
+          `SELECT a.name, a.tags_json, a.usage_count, a.note AS asset_note,
+                  s.label, s.note AS semantic_note
+           FROM sticker_assets a
+           LEFT JOIN sticker_semantics s
+             ON s.fingerprint = a.fingerprint AND s.status = 'confirmed'
+           WHERE a.enabled = 1
+           ORDER BY a.name`,
         )
         .all();
       return (results ?? []).map((row) => {
@@ -244,7 +247,13 @@ export function createStore(deps) {
             tags = parsed.filter((tag) => typeof tag === "string");
           }
         } catch {}
-        return { name: row.name, tags, usageCount: Number(row.usage_count ?? 0) };
+        if (row.label && !tags.includes(row.label)) tags.unshift(row.label);
+        return {
+          name: row.name,
+          tags,
+          note: row.semantic_note || row.asset_note || "",
+          usageCount: Number(row.usage_count ?? 0),
+        };
       });
     } catch (error) {
       deps.logger.error("sticker catalog read failed:", error);
@@ -283,6 +292,230 @@ export function createStore(deps) {
       // into a retriable batch failure.
       deps.logger.error("sticker usage counter update failed:", error);
     }
+  }
+
+  async function getStickerSemantic(fingerprint) {
+    try {
+      return await db()
+        .prepare(
+          `SELECT fingerprint, label, note, status, seen_count,
+                  source_url_ciphertext, source_url_expires_at
+           FROM sticker_semantics
+           WHERE fingerprint = ?`,
+        )
+        .bind(fingerprint)
+        .first();
+    } catch (error) {
+      deps.logger.error("sticker semantics read failed:", error);
+      return null;
+    }
+  }
+
+  async function getStickerAssetByFingerprint(fingerprint) {
+    try {
+      const row = await db()
+        .prepare(
+          `SELECT name, tags_json, note
+           FROM sticker_assets
+           WHERE fingerprint = ? AND enabled = 1`,
+        )
+        .bind(fingerprint)
+        .first();
+      if (!row) return null;
+      let tags = [];
+      try {
+        const parsed = JSON.parse(row.tags_json ?? "[]");
+        if (Array.isArray(parsed)) tags = parsed.filter((tag) => typeof tag === "string");
+      } catch {}
+      return { name: row.name, tags, note: row.note ?? "" };
+    } catch (error) {
+      deps.logger.error("sticker asset fingerprint lookup failed:", error);
+      return null;
+    }
+  }
+
+  async function recordStickerObservation({
+    fingerprint,
+    sourceUrlCiphertext = null,
+    sourceUrlExpiresAt = null,
+    knownLabel = null,
+    knownNote = "",
+  }) {
+    const now = deps.now();
+    await db()
+      .prepare(
+        `INSERT INTO sticker_semantics
+           (fingerprint, label, note, status, seen_count, first_seen_at,
+            last_seen_at, source_url_ciphertext, source_url_expires_at,
+            created_at, updated_at)
+         VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(fingerprint) DO UPDATE SET
+           seen_count = sticker_semantics.seen_count + 1,
+           last_seen_at = excluded.last_seen_at,
+           status = CASE
+             WHEN sticker_semantics.status IN ('pending', 'asked') AND excluded.status = 'confirmed'
+             THEN 'confirmed' ELSE sticker_semantics.status END,
+           label = CASE
+             WHEN sticker_semantics.status IN ('pending', 'asked') AND excluded.status = 'confirmed'
+             THEN excluded.label ELSE sticker_semantics.label END,
+           note = CASE
+             WHEN sticker_semantics.status IN ('pending', 'asked') AND excluded.status = 'confirmed'
+             THEN excluded.note ELSE sticker_semantics.note END,
+           source_url_ciphertext = CASE
+             WHEN sticker_semantics.status = 'pending' AND excluded.status = 'confirmed'
+             THEN NULL
+             WHEN sticker_semantics.status = 'pending' AND excluded.status = 'pending'
+               AND excluded.source_url_ciphertext IS NOT NULL
+             THEN excluded.source_url_ciphertext
+             ELSE sticker_semantics.source_url_ciphertext END,
+           source_url_expires_at = CASE
+             WHEN sticker_semantics.status = 'pending' AND excluded.status = 'confirmed'
+             THEN NULL
+             WHEN sticker_semantics.status = 'pending' AND excluded.status = 'pending'
+               AND excluded.source_url_ciphertext IS NOT NULL
+             THEN excluded.source_url_expires_at
+             ELSE sticker_semantics.source_url_expires_at END,
+           updated_at = excluded.updated_at`
+      )
+      .bind(
+        fingerprint,
+        knownLabel,
+        knownNote,
+        knownLabel ? "confirmed" : "pending",
+        now,
+        now,
+        knownLabel ? null : sourceUrlCiphertext,
+        knownLabel ? null : sourceUrlExpiresAt,
+        now,
+        now,
+      )
+      .run();
+  }
+
+  async function clearExpiredStickerSourceUrls(now = deps.now()) {
+    await db()
+      .prepare(
+        `UPDATE sticker_semantics
+         SET source_url_ciphertext = NULL, source_url_expires_at = NULL,
+             updated_at = ?
+         WHERE source_url_ciphertext IS NOT NULL
+           AND source_url_expires_at <= ?`,
+      )
+      .bind(now, now)
+      .run();
+  }
+
+  async function loadNextStickerReview(now = deps.now()) {
+    await clearExpiredStickerSourceUrls(now);
+    return db()
+      .prepare(
+        `SELECT fingerprint, source_url_ciphertext, source_url_expires_at
+         FROM sticker_semantics
+         WHERE status = 'pending'
+           AND source_url_ciphertext IS NOT NULL
+           AND source_url_expires_at > ?
+         ORDER BY first_seen_at, fingerprint
+         LIMIT 1`,
+      )
+      .bind(now)
+      .first();
+  }
+
+  async function markStickerAsked(fingerprint) {
+    const now = deps.now();
+    const result = await db()
+      .prepare(
+        `UPDATE sticker_semantics
+         SET status = 'asked', asked_at = ?, source_url_ciphertext = NULL,
+             source_url_expires_at = NULL, updated_at = ?
+         WHERE fingerprint = ? AND status = 'pending'`,
+      )
+      .bind(now, now, fingerprint)
+      .run();
+    return Number(result.meta?.changes ?? 0) > 0;
+  }
+
+  async function clearStickerSourceUrl(fingerprint) {
+    await db()
+      .prepare(
+        `UPDATE sticker_semantics
+         SET source_url_ciphertext = NULL, source_url_expires_at = NULL,
+             updated_at = ?
+         WHERE fingerprint = ?`,
+      )
+      .bind(deps.now(), fingerprint)
+      .run();
+  }
+
+  async function findStickerByReviewId(reviewId) {
+    const { results } = await db()
+      .prepare(
+        `SELECT fingerprint, label, note, status
+         FROM sticker_semantics
+         WHERE fingerprint LIKE ?
+         ORDER BY fingerprint
+         LIMIT 2`,
+      )
+      .bind(`${reviewId}%`)
+      .all();
+    return results ?? [];
+  }
+
+  async function applyStickerReview({ fingerprint, status, label = null, note = "" }) {
+    const now = deps.now();
+    const result = status === "ignored"
+      ? await db()
+          .prepare(
+            `UPDATE sticker_semantics
+             SET status = 'ignored', label = NULL, note = '',
+                 source_url_ciphertext = NULL, source_url_expires_at = NULL,
+                 updated_at = ?
+             WHERE fingerprint = ? AND status IN ('pending', 'asked', 'confirmed')`,
+          )
+          .bind(now, fingerprint)
+          .run()
+      : await db()
+          .prepare(
+            `UPDATE sticker_semantics
+             SET status = 'confirmed', label = ?, note = ?,
+                 source_url_ciphertext = NULL, source_url_expires_at = NULL,
+                 confirmed_at = ?, updated_at = ?
+             WHERE fingerprint = ? AND status IN ('pending', 'asked', 'confirmed')`,
+          )
+          .bind(label, note, now, now, fingerprint)
+          .run();
+    return Number(result.meta?.changes ?? 0) > 0;
+  }
+
+  async function reserveStickerReviewSlot(monthKey, limit) {
+    const now = deps.now();
+    await db()
+      .prepare(
+        `INSERT OR IGNORE INTO sticker_review_quota (month_key, sent_count, updated_at)
+         VALUES (?, 0, ?)`,
+      )
+      .bind(monthKey, now)
+      .run();
+    const result = await db()
+      .prepare(
+        `UPDATE sticker_review_quota
+         SET sent_count = sent_count + 1, updated_at = ?
+         WHERE month_key = ? AND sent_count < ?`,
+      )
+      .bind(now, monthKey, limit)
+      .run();
+    return Number(result.meta?.changes ?? 0) > 0;
+  }
+
+  async function releaseStickerReviewSlot(monthKey) {
+    await db()
+      .prepare(
+        `UPDATE sticker_review_quota
+         SET sent_count = MAX(sent_count - 1, 0), updated_at = ?
+         WHERE month_key = ?`,
+      )
+      .bind(deps.now(), monthKey)
+      .run();
   }
 
   async function getLastSentSticker(conversationId) {
@@ -692,8 +925,19 @@ export function createStore(deps) {
     loadLore,
     loadStickerCatalog,
     getStickerAsset,
+    getStickerAssetByFingerprint,
     markStickerUsed,
     getLastSentSticker,
+    getStickerSemantic,
+    recordStickerObservation,
+    loadNextStickerReview,
+    clearExpiredStickerSourceUrls,
+    markStickerAsked,
+    clearStickerSourceUrl,
+    findStickerByReviewId,
+    applyStickerReview,
+    reserveStickerReviewSlot,
+    releaseStickerReviewSlot,
     storeAssistantMessage,
     getNextAutonomousAt,
     markAutonomousReply,

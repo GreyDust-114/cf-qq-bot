@@ -74,6 +74,18 @@ export const MAX_FACE_EXT_BYTES = 64 * 1024;
 export const STICKER_COOLDOWN_MS = 30 * 60 * 1000;
 export const STICKER_MEDIA_URL_TTL_SECONDS = 180;
 export const STICKER_MAX_BYTES = 1_572_864;
+export const STICKER_SOURCE_URL_TTL_MS = 24 * 60 * 60 * 1000;
+export const STICKER_REVIEW_MONTHLY_LIMIT = 2;
+
+export function stickerReviewMonthlyLimit(env) {
+  const raw = env?.STICKER_REVIEW_MONTHLY_LIMIT;
+  if (raw == null || String(raw).trim() === "") return STICKER_REVIEW_MONTHLY_LIMIT;
+  const configured = Number(raw);
+  if (!Number.isInteger(configured) || configured < 0) {
+    return STICKER_REVIEW_MONTHLY_LIMIT;
+  }
+  return Math.min(configured, 4);
+}
 
 export function stickerCooldownMs(env) {
   const raw = env?.STICKER_COOLDOWN_MS;
