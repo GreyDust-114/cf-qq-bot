@@ -634,6 +634,39 @@ export function createProcessor(env, overrides = {}) {
     );
   }
 
+  async function handleOwnerStickerImage(
+    trigger,
+    fingerprint,
+    deadline,
+    isCurrent,
+    batchMeta,
+  ) {
+    const reviewMeta = { ...batchMeta, route: "sticker-review" };
+    const id = stickerReviewId(fingerprint);
+    const semantic = await store.getStickerSemantic(fingerprint);
+    let response;
+
+    if (semantic?.status === "confirmed" && semantic.label) {
+      response = `这张贴纸已记为“${normalizeStickerNote(semantic.label)}”。要改标签可发“纠正贴纸 ${id} 新标签 用途”。`;
+    } else if (semantic?.status === "ignored") {
+      response = `这张贴纸之前被忽略了；要重新收录可发“确认贴纸 ${id} 标签”。`;
+    } else {
+      await store.markStickerAsked(fingerprint);
+      await store.clearStickerSourceUrl(fingerprint);
+      response =
+        `收到这张贴纸，编号 ${id}。回复“确认贴纸 ${id} 标签”“纠正贴纸 ${id} 标签 用途”或“忽略贴纸 ${id}”。`;
+    }
+
+    return sendAndStore(
+      trigger,
+      [response],
+      deadline,
+      prefetchToken(),
+      isCurrent,
+      reviewMeta,
+    );
+  }
+
   async function finishGroupReply(trigger, outcome, route) {
     if (outcome.status !== "replied" || trigger.scope !== "group") {
       return outcome;
@@ -1014,6 +1047,15 @@ export function createProcessor(env, overrides = {}) {
       deps.env.STICKER_OWNER_OPENID &&
       trigger.targetId === deps.env.STICKER_OWNER_OPENID
     ) {
+      if (trigger.hasSticker === true && trigger.stickerFingerprint) {
+        return handleOwnerStickerImage(
+          trigger,
+          trigger.stickerFingerprint,
+          deadline,
+          context.isCurrent,
+          batchMeta,
+        );
+      }
       const ownerCommand = parseOwnerStickerCommand(trigger.content);
       if (ownerCommand) {
         return handleOwnerStickerCommand(

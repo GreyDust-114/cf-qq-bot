@@ -480,7 +480,7 @@ export function createStore(deps) {
              SET status = 'confirmed', label = ?, note = ?,
                  source_url_ciphertext = NULL, source_url_expires_at = NULL,
                  confirmed_at = ?, updated_at = ?
-             WHERE fingerprint = ? AND status IN ('pending', 'asked', 'confirmed')`,
+             WHERE fingerprint = ? AND status IN ('pending', 'asked', 'confirmed', 'ignored')`,
           )
           .bind(label, note, now, now, fingerprint)
           .run();
