@@ -46,7 +46,7 @@ QQ AI Bot is running.
 | `stage=sticker-vision id=… label=yes/no note=yes/no` | owner 私聊送图后的一次性识图初判；失败只影响建议文案，不影响编号和后续收录 |
 | `stage=web tool=fetch status=ok host=… ms=… chars=…` | 显式 URL 抓取成功；只记 host、耗时和正文长度，不记完整 URL/正文 |
 | `stage=web tool=fetch status=error code=… ms=…` | Fetch 失败（403/404/429/timeout/empty/network 等）已降级为无网页资料，正常回复继续 |
-| `stage=web tool=search status=ok trigger=… results=… queryChars=… ms=…` | 显式搜索成功；`trigger` 为 `explicit` / `time-sensitive` / `news`，只记查询字符数，不记查询原文 |
+| `stage=web tool=search status=ok trigger=… results=… queryChars=… ms=…` | 显式搜索成功；`trigger` 为 `explicit` / `time-sensitive` / `news` / `term`，只记查询字符数，不记查询原文 |
 | `stage=web tool=search status=empty trigger=… queryChars=… ms=…` | Search 正常返回但没有结果，本轮按无资料处理 |
 | `stage=web tool=search status=error code=… ms=…` | Search 失败（400/401/402/429/timeout/network 等）已降级，正常回复继续 |
 | `stage=web tool=web skipped reason=disabled` | 网页工具整体关闭，本轮不联网 |

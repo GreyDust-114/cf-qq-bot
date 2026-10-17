@@ -90,14 +90,38 @@ const TERSE_TOPIC_PATTERN =
 const NEGATION_PATTERN =
   /(?:没|没有|无)(?:什么)?(?:新闻|热搜|消息|进展|更新)/u;
 const NEWS_PATTERN = /(?:新闻|热搜)/u;
+const TERM_PATTERN =
+  /(?:是什么意思|是啥意思|什么意思|是什么梗|什么梗|是什么来头|什么来头|怎么读|怎么念)/u;
+const TERM_SUBJECT_PATTERN = /^[\p{L}\p{N}_\-+.# ]{1,20}$/u;
+const PRONOUN_SUBJECT_PATTERN =
+  /^(?:这|那|它|你|我|他|她|我们|你们|他们|她们|这个|那个|这段|那段|这些|那些|这里|那里)/u;
 const QUESTION_PATTERN =
   /(?:吗|呢|怎么|如何|多少|有没有|是什么|什么|？|\?)/u;
 
 function normalizeIntentText(text) {
   return String(text ?? "")
     .replace(/<@!?[^>]+>/gu, " ")
+    .replace(
+      /(^|[\s，。！？；：、,.!?;:])@[^\s，。！？；：、,.!?;:]+/gu,
+      "$1",
+    )
     .replace(/【[^】]*】/gu, " ")
     .replace(/\s+/gu, " ")
+    .trim();
+}
+
+function termSubject(source) {
+  const match = source.match(
+    /^(.*?)(?:是什么意思|是啥意思|什么意思|是什么梗|什么梗|是什么来头|什么来头|怎么读|怎么念)/u,
+  );
+
+  if (!match) {
+    return "";
+  }
+
+  return match[1]
+    .replace(/[「」『』“”"']/gu, "")
+    .replace(/^[\s，。！？；：、,.!?;:]+/u, "")
     .trim();
 }
 
@@ -108,8 +132,12 @@ function buildSearchQuery(source) {
       "$1",
     )
     .replace(
-      /(?:搜一下|搜一搜|搜搜|搜索|查一下|查一查|查查|查询|上网查|网上查)/gu,
+      /(?:搜一下|搜一搜|搜搜|搜索一下|搜索下|搜索|查一下|查一查|查查|查询一下|查询下|查询|上网查|网上查)/gu,
       " ",
+    )
+    .replace(
+      /(?:是什么意思|是啥意思|什么意思|是什么梗|什么梗|是什么来头|什么来头|怎么读|怎么念)/gu,
+      "",
     )
     .replace(/(?:怎么样|如何|怎么看|有什么|有哪些|是多少)/gu, "")
     .replace(/[你我]$/u, "")
@@ -144,8 +172,13 @@ export function detectSearchIntent(text) {
     !negated &&
     NEWS_PATTERN.test(source) &&
     (question || source.length <= 12);
+  const term = TERM_PATTERN.test(source) ? termSubject(source) : "";
+  const termTrigger =
+    term.length > 0 &&
+    TERM_SUBJECT_PATTERN.test(term) &&
+    !PRONOUN_SUBJECT_PATTERN.test(term);
 
-  if (!explicit && !timely && !news) {
+  if (!explicit && !timely && !news && !termTrigger) {
     return null;
   }
 
@@ -157,7 +190,13 @@ export function detectSearchIntent(text) {
 
   return {
     query,
-    trigger: explicit ? "explicit" : timely ? "time-sensitive" : "news",
+    trigger: explicit
+      ? "explicit"
+      : termTrigger
+        ? "term"
+        : timely
+          ? "time-sensitive"
+          : "news",
   };
 }
 
