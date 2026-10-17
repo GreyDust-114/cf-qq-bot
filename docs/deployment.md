@@ -56,6 +56,7 @@ npx wrangler d1 migrations apply qq-ai-bot-db --remote
 - `0007_sticker_assets.sql`：BOT-021 D1 base64 贴纸资源表；需与 BOT-020 联合上线
 - `0008_sticker_semantics.sql`：BOT-020 指纹、确认状态与加密短期源 URL 队列
 - `0009_sticker_asset_fingerprint.sql`：把出站素材指纹/用途备注与同一语义库关联
+- `0010_sticker_learning.sql`：贴纸素材支持 PNG/JPEG/GIF/WebP，并新增 `sticker_usage` 使用场景记忆（每指纹最多 12 条）
 
 ## 变量与机密
 
@@ -75,7 +76,7 @@ npx wrangler secret put LLM_API_KEY
 - `MEMORY_COMPACT_AFTER_DAYS`：超过多少天的消息开始压缩进 digest（默认 `2`，与保留期无关，保证读窗口之外的内容尽快变成记忆）；
 - `STICKER_MEDIA_BASE_URL`：公网可访问的 Worker HTTPS origin（如 `https://<worker>.workers.dev`），QQ 媒体服务通过短时签名 URL 拉取 D1 图片；
 - `STICKER_COOLDOWN_MS`：每会话贴纸发送间隔（毫秒，默认 1800000）；
-- `STICKER_OWNER_OPENID`：owner 的 C2C openid；owner 必须先私聊拉取待确认贴纸，不能依赖已停用的主动推送；
+- `STICKER_OWNER_OPENID`：owner 的 C2C openid；owner 私聊送贴纸后可用“收录贴纸/确认贴纸/纠正贴纸/贴纸详情/忽略贴纸”管理，不能依赖已停用的主动推送；
 - `STICKER_REVIEW_MONTHLY_LIMIT`：每月 owner 主动拉取的图片回复上限，默认 2；
 - `[triggers] crons = ["0 20 * * *"]`：北京时间每天 04:00 触发整理（UTC 前一天 20:00）。
 

@@ -24,7 +24,7 @@
 | `MEMORY_COMPACT_AFTER_DAYS` | 变量 | 长期记忆：超过多少天的消息开始压缩（默认 `2`，与保留期无关） |
 | `STICKER_MEDIA_BASE_URL` | 变量 | BOT-021：QQ 服务端可访问的 HTTPS Worker origin，用于短时签名 D1 贴纸图片 URL；未配置时贴纸发送安全失败 |
 | `STICKER_COOLDOWN_MS` | 变量 | BOT-021：同一会话任意贴纸之间的最小间隔，毫秒，默认 `1800000`（30 分钟），最大按 24 小时截断；同一张连续使用始终禁止 |
-| `STICKER_OWNER_OPENID` | 变量 | BOT-020：owner 的 QQ C2C openid，用于识别私聊“待确认贴纸/确认/纠正/忽略”命令；不是群成员 openid |
+| `STICKER_OWNER_OPENID` | 变量 | BOT-020：owner 的 QQ C2C openid，用于识别私聊送图、“待确认贴纸”以及“收录/确认/纠正/详情/忽略贴纸”命令；不是群成员 openid |
 | `STICKER_REVIEW_MONTHLY_LIMIT` | 变量 | BOT-020：每月最多被动回复几张待确认贴纸，默认 `2`，最多配置 `4`；owner 必须先私聊发起，不使用已停用的 C2C 主动推送 |
 
 ## 核心参数
@@ -56,7 +56,7 @@
 | `STICKER_MAX_BYTES` | 1572864 | 单张 D1 base64 贴纸图片字节上限（1.5 MiB） |
 | `STICKER_MEDIA_URL_TTL_SECONDS` | 180 | QQ 拉取贴纸资源的签名 URL 有效期 |
 | `STICKER_COOLDOWN_MS` | 1800000 | 每个会话贴纸发送最小间隔（可由环境变量覆盖） |
-| `STICKER_SOURCE_URL_TTL_MS` | 86400000 | owner 待确认贴纸的加密源 URL 最长保留时间；不保存原图 bytes |
+| `STICKER_SOURCE_URL_TTL_MS` | 86400000 | owner 待确认/待收录贴纸的加密源 URL 最长保留时间；未收录前不保存原图 bytes |
 | `STICKER_REVIEW_MONTHLY_LIMIT` | 2 | owner 每月主动拉取的待确认贴纸回复条数（上限4） |
 | `MEMORY_RETENTION_MS` | 30 天 | 长期记忆：原文保留期（`MEMORY_RETENTION_DAYS` 可覆盖） |
 | `MEMORY_COMPACT_AFTER_MS` | 2 天 | 长期记忆：超过这个时长的消息才值得压缩（`MEMORY_COMPACT_AFTER_DAYS` 可覆盖） |

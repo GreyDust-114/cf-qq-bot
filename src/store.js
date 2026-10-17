@@ -231,7 +231,7 @@ export function createStore(deps) {
       const { results } = await db()
         .prepare(
           `SELECT a.name, a.tags_json, a.usage_count, a.note AS asset_note,
-                  s.label, s.note AS semantic_note
+                  a.fingerprint, s.label, s.note AS semantic_note
            FROM sticker_assets a
            LEFT JOIN sticker_semantics s
              ON s.fingerprint = a.fingerprint AND s.status = 'confirmed'
@@ -239,7 +239,9 @@ export function createStore(deps) {
            ORDER BY a.name`,
         )
         .all();
-      return (results ?? []).map((row) => {
+
+      const entries = [];
+      for (const row of results ?? []) {
         let tags = [];
         try {
           const parsed = JSON.parse(row.tags_json ?? "[]");
@@ -248,13 +250,27 @@ export function createStore(deps) {
           }
         } catch {}
         if (row.label && !tags.includes(row.label)) tags.unshift(row.label);
-        return {
+
+        // Recent context is evidence for how a sticker is actually used; it is
+        // advisory data, never an instruction. Loaded per asset so the catalog
+        // stays bounded and a missing usage table degrades to no hints.
+        let recentContexts = [];
+        if (row.fingerprint) {
+          recentContexts = await loadStickerUsage(row.fingerprint, 2);
+        }
+
+        entries.push({
           name: row.name,
           tags,
           note: row.semantic_note || row.asset_note || "",
           usageCount: Number(row.usage_count ?? 0),
-        };
-      });
+          fingerprint: row.fingerprint ?? null,
+          recentContexts: recentContexts
+            .map((usage) => usage.context)
+            .filter(Boolean),
+        });
+      }
+      return entries;
     } catch (error) {
       deps.logger.error("sticker catalog read failed:", error);
       return [];
@@ -265,7 +281,8 @@ export function createStore(deps) {
     try {
       return await db()
         .prepare(
-          `SELECT name, mime_type, data_base64, tags_json, usage_count
+          `SELECT name, mime_type, data_base64, tags_json, usage_count,
+                  fingerprint, note
            FROM sticker_assets
            WHERE name = ? AND enabled = 1`,
         )
@@ -447,10 +464,148 @@ export function createStore(deps) {
       .run();
   }
 
+  async function setStickerSourceUrl(fingerprint, sourceUrlCiphertext, expiresAt) {
+    await db()
+      .prepare(
+        `UPDATE sticker_semantics
+         SET source_url_ciphertext = ?, source_url_expires_at = ?, updated_at = ?
+         WHERE fingerprint = ?`,
+      )
+      .bind(sourceUrlCiphertext, expiresAt, deps.now(), fingerprint)
+      .run();
+  }
+
+  // Vision output is stored as an unconfirmed suggestion. Confirmed labels are
+  // never overwritten by a new guess.
+  async function saveStickerSuggestion(fingerprint, label, note = "") {
+    const now = deps.now();
+    await db()
+      .prepare(
+        `UPDATE sticker_semantics
+         SET label = ?, note = ?,
+             status = CASE WHEN status IN ('pending', 'ignored') THEN 'asked'
+                           ELSE status END,
+             asked_at = COALESCE(asked_at, ?),
+             updated_at = ?
+         WHERE fingerprint = ? AND status IN ('pending', 'asked', 'ignored')`,
+      )
+      .bind(label, note, now, now, fingerprint)
+      .run();
+  }
+
+  async function upsertStickerAsset({
+    name,
+    mimeType,
+    dataBase64,
+    fingerprint,
+    note = "",
+    tags = [],
+  }) {
+    const now = deps.now();
+    await db()
+      .prepare(
+        `INSERT INTO sticker_assets
+           (name, mime_type, data_base64, tags_json, usage_count, enabled,
+            created_at, updated_at, fingerprint, note)
+         VALUES (?, ?, ?, ?, 0, 1, ?, ?, ?, ?)
+         ON CONFLICT(name) DO UPDATE SET
+           mime_type = excluded.mime_type,
+           data_base64 = excluded.data_base64,
+           tags_json = excluded.tags_json,
+           fingerprint = excluded.fingerprint,
+           note = excluded.note,
+           enabled = 1,
+           updated_at = excluded.updated_at`,
+      )
+      .bind(
+        name,
+        mimeType,
+        dataBase64,
+        JSON.stringify(tags),
+        now,
+        now,
+        fingerprint,
+        note,
+      )
+      .run();
+  }
+
+  async function recordStickerUsage({
+    fingerprint,
+    kind,
+    conversationId = null,
+    context = "",
+  }) {
+    if (!fingerprint || !["inbound", "outbound"].includes(kind)) return;
+    const now = deps.now();
+    try {
+      await db()
+        .prepare(
+          `INSERT INTO sticker_usage
+             (fingerprint, kind, conversation_id, context, created_at)
+           VALUES (?, ?, ?, ?, ?)`,
+        )
+        .bind(fingerprint, kind, conversationId, context, now)
+        .run();
+      // Keep only the newest evidence per sticker; the table is a short-term
+      // memory, not an audit log.
+      await db()
+        .prepare(
+          `DELETE FROM sticker_usage
+           WHERE fingerprint = ? AND id NOT IN (
+             SELECT id FROM sticker_usage
+             WHERE fingerprint = ?
+             ORDER BY created_at DESC, id DESC
+             LIMIT 12
+           )`,
+        )
+        .bind(fingerprint, fingerprint)
+        .run();
+    } catch (error) {
+      // Usage memory is telemetry: losing it must not fail the chat batch.
+      deps.logger.error("sticker usage write failed:", error);
+    }
+  }
+
+  async function loadStickerUsage(fingerprint, limit = 3) {
+    try {
+      const { results } = await db()
+        .prepare(
+          `SELECT kind, context, created_at
+           FROM sticker_usage
+           WHERE fingerprint = ? AND context <> ''
+           ORDER BY created_at DESC, id DESC
+           LIMIT ?`,
+        )
+        .bind(fingerprint, Math.max(1, Math.min(12, Number(limit) || 3)))
+        .all();
+      return results ?? [];
+    } catch (error) {
+      deps.logger.error("sticker usage read failed:", error);
+      return [];
+    }
+  }
+
+  async function getPreviousUserMessage(conversationId, beforeRowId) {
+    const row = await db()
+      .prepare(
+        `SELECT content
+         FROM messages
+         WHERE conversation_id = ? AND role = 'user' AND id < ?
+           AND content NOT LIKE '%【贴纸%'
+         ORDER BY id DESC
+         LIMIT 1`,
+      )
+      .bind(conversationId, Number(beforeRowId) || 0)
+      .first();
+    return row?.content ?? null;
+  }
+
   async function findStickerByReviewId(reviewId) {
     const { results } = await db()
       .prepare(
-        `SELECT fingerprint, label, note, status
+        `SELECT fingerprint, label, note, status, seen_count,
+                source_url_ciphertext, source_url_expires_at
          FROM sticker_semantics
          WHERE fingerprint LIKE ?
          ORDER BY fingerprint
@@ -929,6 +1084,12 @@ export function createStore(deps) {
     markStickerUsed,
     getLastSentSticker,
     getStickerSemantic,
+    setStickerSourceUrl,
+    saveStickerSuggestion,
+    upsertStickerAsset,
+    recordStickerUsage,
+    loadStickerUsage,
+    getPreviousUserMessage,
     recordStickerObservation,
     loadNextStickerReview,
     clearExpiredStickerSourceUrls,

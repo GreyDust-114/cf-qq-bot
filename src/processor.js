@@ -13,6 +13,7 @@ import {
   MAX_IMAGES_PER_BATCH,
   MIN_STAGE_BUDGET_MS,
   PART_GAP_MAX_MS,
+  SEND_BUDGET_RESERVE_MS,
   STICKER_SOURCE_URL_TTL_MS,
   stickerCooldownMs,
   stickerReviewMonthlyLimit,
@@ -23,14 +24,21 @@ import {
   FALLBACK_ERROR_REPLY,
   FALLBACK_MENTION_REPLY,
   FALLBACK_UNSAFE_REPLY,
+  STICKER_VISION_SYSTEM_PROMPT,
 } from "./prompts.js";
 import { createReplySender } from "./sender.js";
 import { createStickerMediaUrl } from "./sticker-media.js";
 import {
+  STICKER_ASSET_MIME_TYPES,
   decryptStickerSourceUrl,
   encryptStickerSourceUrl,
+  fetchStickerImage,
+  fingerprintStickerBytes,
   normalizeStickerNote,
   parseOwnerStickerCommand,
+  parseStickerVisionSuggestion,
+  stickerAssetName,
+  stickerBytesToBase64,
   stickerReviewId,
 } from "./stickers.js";
 import { createStore } from "./store.js";
@@ -87,6 +95,12 @@ function selectCurrentBatchImages(messages, targetEventId) {
     }));
 }
 
+function stickerUsageContext(content) {
+  return normalizeStickerNote(
+    String(content ?? "").replace(/【贴纸(?::[^】]*)?】/gu, " "),
+  ).slice(0, 120);
+}
+
 export function createProcessor(env, overrides = {}) {
   const deps = createDependencies(env, overrides);
 
@@ -102,6 +116,12 @@ export function createProcessor(env, overrides = {}) {
       incoming.conversationId,
       incoming.scope,
     );
+
+    const isOwnerSticker =
+      incoming.scope === "c2c" &&
+      Boolean(deps.env.STICKER_OWNER_OPENID) &&
+      incoming.targetId === deps.env.STICKER_OWNER_OPENID &&
+      incoming.hasSticker === true;
 
     let content = incoming.content;
     let semantic = null;
@@ -158,6 +178,47 @@ export function createProcessor(env, overrides = {}) {
             : null,
           knownLabel: knownAsset?.name ?? null,
           knownNote: knownAsset?.note || knownAsset?.tags.join("、") || "",
+        });
+      }
+
+      // Owner-sent stickers are the curation path. Refresh the encrypted
+      // source URL even when the row is already 'asked' so a re-sent image can
+      // still be collected as an outbound asset. The URL expires in 24h.
+      if (isOwnerSticker && saved.isNew && incoming.stickerImageUrl) {
+        try {
+          const ciphertext = await encryptStickerSourceUrl(
+            incoming.stickerImageUrl,
+            deps.env.QQ_APP_SECRET,
+          );
+          if (ciphertext) {
+            await store.setStickerSourceUrl(
+              incoming.stickerFingerprint,
+              ciphertext,
+              deps.now() + STICKER_SOURCE_URL_TTL_MS,
+            );
+          }
+        } catch {
+          deps.logger.log("stage=sticker owner source URL not retained");
+        }
+      }
+
+      // Real group usage is the evidence used later to refine a label. Only
+      // confirmed stickers are recorded, and only the preceding human message
+      // (a bounded snippet) is kept—not the image.
+      if (
+        saved.isNew &&
+        incoming.scope === "group" &&
+        (semantic?.status === "confirmed" || knownAsset)
+      ) {
+        const previous = await store.getPreviousUserMessage(
+          incoming.conversationId,
+          saved.rowId,
+        );
+        await store.recordStickerUsage({
+          fingerprint: incoming.stickerFingerprint,
+          kind: "inbound",
+          conversationId: incoming.conversationId,
+          context: normalizeStickerNote(previous ?? "").slice(0, 120),
         });
       }
     }
@@ -307,7 +368,15 @@ export function createProcessor(env, overrides = {}) {
         `result=${result.ok ? "sent" : result.uncertain ? "uncertain" : "failed"}` +
         `${result.reason ? ` reason=${result.reason}` : ""}`,
     );
-    if (result.ok) await store.markStickerUsed(name);
+    if (result.ok) {
+      await store.markStickerUsed(name);
+      await store.recordStickerUsage({
+        fingerprint: asset.fingerprint,
+        kind: "outbound",
+        conversationId: trigger.conversationId,
+        context: stickerUsageContext(trigger.content),
+      });
+    }
     return result;
   }
 
@@ -519,6 +588,164 @@ export function createProcessor(env, overrides = {}) {
     return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}`;
   }
 
+  async function stickerSourceUrlFor(semantic) {
+    if (!semantic?.source_url_ciphertext) return null;
+    if (Number(semantic.source_url_expires_at) <= deps.now()) return null;
+    return decryptStickerSourceUrl(
+      semantic.source_url_ciphertext,
+      deps.env.QQ_APP_SECRET,
+    );
+  }
+
+  // One-off vision pass used only for owner-submitted stickers. The result is a
+  // stored, unconfirmed suggestion; the chat model never sees sticker images.
+  async function suggestStickerMeaning(fingerprint, sourceUrl, deadline) {
+    if (!sourceUrl) return null;
+    const budget = deadline - deps.now() - SEND_BUDGET_RESERVE_MS;
+    if (budget < MIN_STAGE_BUDGET_MS) return null;
+
+    try {
+      const raw = await llm.callDeepSeek(
+        [
+          { role: "system", content: STICKER_VISION_SYSTEM_PROMPT },
+          {
+            role: "user",
+            content: [
+              { type: "text", text: "识别这张贴纸，给出初判。" },
+              { type: "image_url", image_url: { url: sourceUrl } },
+            ],
+          },
+        ],
+        {
+          thinking: false,
+          maxTokens: 400,
+          timeoutMs: Math.min(12_000, budget),
+          label: "sticker-vision",
+          imageCount: 1,
+        },
+      );
+      const parsed = parseStickerVisionSuggestion(raw);
+      deps.logger.log(
+        `stage=sticker-vision id=${stickerReviewId(fingerprint)} ` +
+          `label=${parsed.label ? "yes" : "no"} ` +
+          `note=${parsed.note ? "yes" : "no"}`,
+      );
+      return parsed;
+    } catch (error) {
+      deps.logger.error("stage=sticker-vision failed:", error);
+      return null;
+    }
+  }
+
+  async function collectStickerAsset(trigger, semantic, command, deadline, isCurrent, reviewMeta) {
+    const label =
+      command.label ?? normalizeStickerNote(semantic.label ?? "");
+    if (!label) {
+      return sendAndStore(
+        trigger,
+        [`请给出标签：收录贴纸 ${command.id} 标签 [用途]`],
+        deadline,
+        prefetchToken(),
+        isCurrent,
+        reviewMeta,
+      );
+    }
+
+    const sourceUrl = await stickerSourceUrlFor(semantic);
+    if (!sourceUrl) {
+      await store.clearStickerSourceUrl(semantic.fingerprint);
+      return sendAndStore(
+        trigger,
+        ["这张贴纸的临时图片链接已过期，请重新私聊发送这张贴纸再收录。"],
+        deadline,
+        prefetchToken(),
+        isCurrent,
+        reviewMeta,
+      );
+    }
+
+    const image = await fetchStickerImage(sourceUrl, deps.fetch);
+    const failure =
+      image.ok === false
+        ? {
+            "too-large": "这张贴纸超过 1.5 MB，暂时不能收录。",
+            mime: "这张图的格式不能收录。",
+            http: "图片下载失败，稍后再试或重新发送。",
+            "fetch-failed": "图片下载失败，稍后再试或重新发送。",
+            empty: "图片内容是空的，请重新发送。",
+            "invalid-url": "图片链接无效，请重新发送。",
+          }[image.reason] ?? "图片读取失败，请重新发送。"
+        : null;
+    if (failure) {
+      return sendAndStore(
+        trigger,
+        [failure],
+        deadline,
+        prefetchToken(),
+        isCurrent,
+        reviewMeta,
+      );
+    }
+
+    if (!STICKER_ASSET_MIME_TYPES.includes(image.mimeType)) {
+      return sendAndStore(
+        trigger,
+        ["目前只支持 PNG、JPEG、GIF、WebP 贴纸。"],
+        deadline,
+        prefetchToken(),
+        isCurrent,
+        reviewMeta,
+      );
+    }
+
+    const actualFingerprint = await fingerprintStickerBytes(image.bytes);
+    if (actualFingerprint !== semantic.fingerprint) {
+      await store.clearStickerSourceUrl(semantic.fingerprint);
+      return sendAndStore(
+        trigger,
+        ["图片内容已经变了，请重新发送再收录。"],
+        deadline,
+        prefetchToken(),
+        isCurrent,
+        reviewMeta,
+      );
+    }
+
+    const existing = await store.getStickerAssetByFingerprint(
+      semantic.fingerprint,
+    );
+    const name = existing?.name ?? stickerAssetName(semantic.fingerprint);
+    const note = command.note || semantic.note || "";
+
+    await store.upsertStickerAsset({
+      name,
+      mimeType: image.mimeType,
+      dataBase64: stickerBytesToBase64(image.bytes),
+      fingerprint: semantic.fingerprint,
+      note,
+    });
+    const applied = await store.applyStickerReview({
+      fingerprint: semantic.fingerprint,
+      status: "confirmed",
+      label,
+      note,
+    });
+    await store.clearStickerSourceUrl(semantic.fingerprint);
+
+    return sendAndStore(
+      trigger,
+      [
+        applied
+          ? `已收录“${label}”，编号 ${command.id}，出站素材名 ${name}。以后按这个标签使用；要改可发“纠正贴纸 ${command.id} 新标签 用途”。`
+          : "这张贴纸的语义状态刚变化了，请再发一次贴纸。",
+      ],
+      deadline,
+      prefetchToken(),
+      isCurrent,
+      reviewMeta,
+    );
+  }
+
   async function handleOwnerStickerCommand(
     trigger,
     command,
@@ -613,17 +840,69 @@ export function createProcessor(env, overrides = {}) {
     }
 
     const semantic = matches[0];
+
+    if (command.kind === "detail") {
+      const asset = await store.getStickerAssetByFingerprint(
+        semantic.fingerprint,
+      );
+      const usage = await store.loadStickerUsage(semantic.fingerprint, 3);
+      const lines = [
+        `贴纸 ${command.id}：${semantic.label ? `“${semantic.label}”` : "未命名"}（${semantic.status}）`,
+        semantic.note ? `用途：${semantic.note}` : null,
+        `出现过 ${semantic.seen_count} 次`,
+        asset ? `已收录出站素材：${asset.name}` : "未收录出站素材",
+        ...usage.map(
+          (row) =>
+            `- ${row.kind === "inbound" ? "群里出现时" : "机器人使用时"}：${normalizeStickerNote(row.context).slice(0, 80)}`,
+        ),
+      ].filter(Boolean);
+      return sendAndStore(
+        trigger,
+        [lines.join("\n")],
+        deadline,
+        tokenPromise,
+        isCurrent,
+        reviewMeta,
+      );
+    }
+
+    if (command.kind === "collect") {
+      return collectStickerAsset(
+        trigger,
+        semantic,
+        command,
+        deadline,
+        isCurrent,
+        reviewMeta,
+      );
+    }
+
+    const label =
+      command.kind === "ignore"
+        ? null
+        : command.label ?? normalizeStickerNote(semantic.label ?? "");
+    if (command.kind !== "ignore" && !label) {
+      return sendAndStore(
+        trigger,
+        [`请给出标签：${command.kind === "correct" ? "纠正" : "确认"}贴纸 ${command.id} 标签 [用途]`],
+        deadline,
+        tokenPromise,
+        isCurrent,
+        reviewMeta,
+      );
+    }
+
     const applied = await store.applyStickerReview({
       fingerprint: semantic.fingerprint,
       status: command.kind === "ignore" ? "ignored" : "confirmed",
-      label: command.kind === "ignore" ? null : command.label,
-      note: command.kind === "ignore" ? "" : command.note,
+      label,
+      note: command.kind === "ignore" ? "" : command.note || semantic.note || "",
     });
     const response = !applied
       ? "这条贴纸状态已经变化了，再查一次吧。"
       : command.kind === "ignore"
         ? `已忽略贴纸 ${command.id}。`
-        : `记下了：${command.label}`;
+        : `记下了：${label}`;
     return sendAndStore(
       trigger,
       [response],
@@ -644,17 +923,46 @@ export function createProcessor(env, overrides = {}) {
     const reviewMeta = { ...batchMeta, route: "sticker-review" };
     const id = stickerReviewId(fingerprint);
     const semantic = await store.getStickerSemantic(fingerprint);
+    const asset = await store.getStickerAssetByFingerprint(fingerprint);
     let response;
 
     if (semantic?.status === "confirmed" && semantic.label) {
-      response = `这张贴纸已记为“${normalizeStickerNote(semantic.label)}”。要改标签可发“纠正贴纸 ${id} 新标签 用途”。`;
+      response = asset
+        ? `这张贴纸已记为“${normalizeStickerNote(semantic.label)}”，也已收录为出站素材。要改可发“纠正贴纸 ${id} 新标签 用途”。`
+        : `这张贴纸已记为“${normalizeStickerNote(semantic.label)}”。要收录为出站素材，直接发“收录贴纸 ${id} [标签] [用途]”（用这次发送的图，链接只保留 24 小时）。`;
     } else if (semantic?.status === "ignored") {
-      response = `这张贴纸之前被忽略了；要重新收录可发“确认贴纸 ${id} 标签”。`;
+      response = `这张贴纸之前被忽略了；要重新收录可发“收录贴纸 ${id} 标签 [用途]”，或“确认贴纸 ${id} 标签”只记含义。`;
     } else {
-      await store.markStickerAsked(fingerprint);
-      await store.clearStickerSourceUrl(fingerprint);
+      const sourceUrl = await stickerSourceUrlFor(semantic);
+      let suggestion;
+      if (semantic?.label) {
+        suggestion = {
+          label: normalizeStickerNote(semantic.label),
+          note: normalizeStickerNote(semantic.note ?? ""),
+        };
+      } else {
+        suggestion = await suggestStickerMeaning(
+          fingerprint,
+          sourceUrl,
+          deadline,
+        );
+        await store.saveStickerSuggestion(
+          fingerprint,
+          suggestion?.label ?? "",
+          suggestion?.note ?? "",
+        );
+      }
+
+      const head = suggestion?.label
+        ? `识图初判：${suggestion.label}${suggestion.note ? `（${suggestion.note}）` : ""}。`
+        : "识图没给出可靠判断。";
       response =
-        `收到这张贴纸，编号 ${id}。回复“确认贴纸 ${id} 标签”“纠正贴纸 ${id} 标签 用途”或“忽略贴纸 ${id}”。`;
+        `收到这张贴纸，编号 ${id}。${head}\n` +
+        `回复“收录贴纸 ${id} [标签] [用途]”加入出站素材（不写标签就用初判）；` +
+        `“确认贴纸 ${id} [标签]”只记含义；“忽略贴纸 ${id}”丢弃。`;
+      if (!sourceUrl) {
+        response += "\n临时图片链接已过期，要收录请重新私聊发送这张贴纸。";
+      }
     }
 
     return sendAndStore(

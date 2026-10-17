@@ -141,9 +141,9 @@ QQ access token 与过期时间。
 
 ### sticker_semantics / sticker_assets
 
-`sticker_semantics`（0008）以 SHA-256 作为入站贴纸指纹，保存 pending/asked/confirmed/ignored 状态、owner 确认的 label/note 与见过次数；图片字节只短暂驻留 Worker 内存。为 owner 主动拉取待确认项，最多保留 24 小时有效的 AES-GCM 加密 QQ 源 URL，发送成功后清除；过期项不可再取用，并在下一次 owner 拉取时清理，不进入 `messages` / 模型上下文。
+`sticker_semantics`（0008）以 SHA-256 作为入站贴纸指纹，保存 pending/asked/confirmed/ignored 状态、owner 确认的 label/note 与见过次数；图片字节只短暂驻留 Worker 内存。为 owner 主动拉取待确认项，最多保留 24 小时有效的 AES-GCM 加密 QQ 源 URL，发送成功或确认后清除；过期项不可再取用，并在下一次 owner 拉取时清理，不进入 `messages` / 模型上下文。owner 直接私聊送图时会先用一次视觉调用生成未确认的建议标签/用途；只有 `收录贴纸` 才会把图片字节写入 D1。
 
-`sticker_assets`（0007/0009）保存维护者获准的出站 base64 素材、名称、标签、用途 note 和同一 SHA-256。两表以指纹连接：素材可作为已知入站标签，owner 确认的语义也用于出站目录。owner review 只能由配置的 C2C openid 私聊命令触发；机器人不尝试已停用的主动 C2C 推送。
+`sticker_assets`（0007/0009/0010）保存获准的出站 base64 素材、名称、标签、用途 note 和同一 SHA-256；0010 允许 PNG/JPEG/GIF/WebP。`sticker_usage`（0010）按指纹记录入站出现和出站使用时的一条短上下文（每个指纹最多保留 12 条），只作为贴纸目录的“近期出现场景”参考资料；owner 可用 `贴纸详情` 查看并据此纠正标签。两表以指纹连接：素材可作为已知入站标签，owner 确认的语义也用于出站目录。owner review 只能由配置的 C2C openid 私聊命令触发；机器人不尝试已停用的主动 C2C 推送。
 
 ### outbox
 

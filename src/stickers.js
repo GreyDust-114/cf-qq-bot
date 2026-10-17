@@ -5,6 +5,13 @@ const MAX_NOTE_CHARS = 160;
 const FINGERPRINT_PREFIX_LENGTH = 8;
 const encoder = new TextEncoder();
 
+export const STICKER_ASSET_MIME_TYPES = Object.freeze([
+  "image/png",
+  "image/jpeg",
+  "image/gif",
+  "image/webp",
+]);
+
 async function readImageBytes(response, maxBytes) {
   if (!response.body?.getReader) {
     const bytes = new Uint8Array(await response.arrayBuffer());
@@ -44,9 +51,10 @@ export async function fingerprintStickerBytes(bytes) {
   return [...digest].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
-// Only fetch transiently to identify the image. Callers persist the SHA-256
-// and, if review is needed, a short-lived source URL reference—not image bytes.
-export async function fetchStickerFingerprint(
+// Only fetch transiently to identify or curate the image. Incoming images are
+// hashed and discarded; image bytes are stored only after the owner explicitly
+// asks to collect the sticker as an outbound asset.
+export async function fetchStickerImage(
   url,
   fetchImpl = fetch,
   options = {},
@@ -88,15 +96,33 @@ export async function fetchStickerFingerprint(
     if (!bytes) return { ok: false, reason: "too-large" };
     if (bytes.length === 0) return { ok: false, reason: "empty" };
 
-    return {
-      ok: true,
-      fingerprint: await fingerprintStickerBytes(bytes),
-      mimeType,
-      size: bytes.length,
-    };
+    return { ok: true, bytes, mimeType, size: bytes.length };
   } catch {
     return { ok: false, reason: "fetch-failed" };
   }
+}
+
+export async function fetchStickerFingerprint(
+  url,
+  fetchImpl = fetch,
+  options = {},
+) {
+  const image = await fetchStickerImage(url, fetchImpl, options);
+  if (!image.ok) return image;
+  return {
+    ok: true,
+    fingerprint: await fingerprintStickerBytes(image.bytes),
+    mimeType: image.mimeType,
+    size: image.size,
+  };
+}
+
+export function stickerBytesToBase64(bytes) {
+  return bytesToBase64(bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes));
+}
+
+export function stickerAssetName(fingerprint) {
+  return `sticker-${String(fingerprint ?? "").slice(0, 16).toLowerCase()}`;
 }
 
 function bytesToBase64(value) {
@@ -178,22 +204,52 @@ export function parseOwnerStickerCommand(value) {
     return { kind: "list-pending" };
   }
 
+  const detail = text.match(/^贴纸详情\s+([a-f\d]{8,64})$/iu);
+  if (detail) {
+    return { kind: "detail", id: detail[1].toLowerCase() };
+  }
+
   const ignore = text.match(/^忽略贴纸\s+([a-f\d]{8,64})$/iu);
   if (ignore) {
     return { kind: "ignore", id: ignore[1].toLowerCase() };
   }
 
+  // The label is optional for confirm/correct/collect: a vision suggestion may
+  // already be stored on the semantic row, and the owner can accept it as-is.
   const setLabel = text.match(
-    /^(确认|纠正)贴纸\s+([a-f\d]{8,64})\s+(\S+)(?:\s+([\s\S]*))?$/iu,
+    /^(收录|确认|纠正)贴纸\s+([a-f\d]{8,64})(?:\s+(\S+))?(?:\s+([\s\S]*))?$/iu,
   );
   if (!setLabel) return null;
 
-  const label = normalizeStickerNote(setLabel[3]).replace(/[【】]/gu, "");
-  if (!label) return null;
+  const kind = { 收录: "collect", 确认: "confirm", 纠正: "correct" }[setLabel[1]];
+  const label = normalizeStickerNote(setLabel[3] ?? "").replace(/[【】]/gu, "");
   return {
-    kind: setLabel[1] === "确认" ? "confirm" : "correct",
+    kind,
     id: setLabel[2].toLowerCase(),
-    label,
+    label: label || null,
     note: normalizeStickerNote(setLabel[4] ?? ""),
   };
+}
+
+// Vision output is advisory only. Parse two labeled lines and treat anything
+// unparseable as "no suggestion" instead of inventing a meaning.
+export function parseStickerVisionSuggestion(raw) {
+  let label = "";
+  let note = "";
+
+  for (const line of String(raw ?? "").split(/\r?\n/u)) {
+    const match = line.match(/^\s*(标签|用途|用法)\s*[:：]\s*(.*)$/u);
+    if (!match) continue;
+    const value = normalizeStickerNote(match[2]).replace(/[【】]/gu, "");
+    if (match[1] === "标签" && !label) label = value.slice(0, 24);
+    else if (match[1] !== "标签" && !note) note = value;
+  }
+
+  if (!label && !note) {
+    const single = normalizeStickerNote(raw).replace(/[【】]/gu, "");
+    if (single && single.length <= 48) label = single.slice(0, 24);
+  }
+  if (/^(?:不确定|无法判断|看不清|未知|不知道)$/u.test(label)) label = "";
+
+  return { label, note };
 }

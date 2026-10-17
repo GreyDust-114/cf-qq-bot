@@ -1,4 +1,5 @@
 import { STICKER_MAX_BYTES, STICKER_MEDIA_URL_TTL_SECONDS } from "./config.js";
+import { STICKER_ASSET_MIME_TYPES } from "./stickers.js";
 
 const encoder = new TextEncoder();
 const MEDIA_URL_TTL_SECONDS = STICKER_MEDIA_URL_TTL_SECONDS;
@@ -142,7 +143,7 @@ export async function serveStickerMedia(request, env, now = Date.now()) {
        FROM sticker_assets
        WHERE name = ? AND enabled = 1`,
     ).bind(name).first();
-    if (!row || !["image/png", "image/jpeg"].includes(row.mime_type)) {
+    if (!row || !STICKER_ASSET_MIME_TYPES.includes(row.mime_type)) {
       return new Response("Not Found", { status: 404 });
     }
 
