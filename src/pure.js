@@ -1046,6 +1046,15 @@ function imageUrlsByEventId(entries, incoming) {
 // 消息顺序是缓存键的一部分：静态块（人设 → 资料库 → 摘要 → 协议提醒）排在
 // 历史之前，分钟级的时间上下文放在最后。DeepSeek 前缀缓存只认完全一致的前缀，
 // 如果把动态时间插在静态块之前，资料库与历史每次调用都会按未命中计费。
+// 网页资料也是动态块，放在历史之后、时间上下文之前；时间上下文继续保持最后。
+function appendWebContext(messages, webContext) {
+  const content = typeof webContext === "string" ? webContext.trim() : "";
+
+  if (content) {
+    messages.push({ role: "system", content });
+  }
+}
+
 export function buildPrivateMessages(context, incoming, options = {}) {
   const messages = [
     { role: "system", content: PRIVATE_SYSTEM_PROMPT },
@@ -1154,6 +1163,8 @@ export function buildPrivateMessages(context, incoming, options = {}) {
         : text,
     });
   }
+
+  appendWebContext(messages, options.webContext);
 
   messages.push({
     role: "system",
@@ -1320,6 +1331,8 @@ export function buildGroupMessages(context, incoming, options = {}) {
         : text,
     });
   }
+
+  appendWebContext(messages, options.webContext);
 
   messages.push({
     role: "system",

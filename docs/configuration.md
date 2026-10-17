@@ -18,6 +18,7 @@
 | `LLM_API_KEY` | Secret | DeepSeek API Key |
 | `LLM_BASE_URL` | 变量 | 默认 `https://api.deepseek.com` |
 | `LLM_MODEL` | 变量 | 默认 `deepseek-flash` |
+| `WEB_TOOLS_ENABLED` | 变量 | BOT-025-01：`"false"` 关闭显式 URL 网页抓取；默认开启 |
 | `ALLOWED_GROUP_OPENID` | 变量 | 灰度群；留空表示不限制 |
 | `MEMORY_DRY_RUN` | 变量 | 长期记忆：`"true"` 只报告不删原文，`"false"` 才实际删除 |
 | `MEMORY_RETENTION_DAYS` | 变量 | 长期记忆：原文保留天数（超过的部分先进摘要、再删除） |
@@ -51,6 +52,9 @@
 | `MAX_PROCESSING_ATTEMPTS` | 3 | 批次最大处理次数 |
 | `INVOCATION_BUDGET_MS` | 28000 | 单次批次内部时间预算 |
 | `LLM_TIMEOUT_MS` | 12000 | 模型调用上限 |
+| `WEB_FETCH_TIMEOUT_MS` | 4000 | 单次 DeepSeek Fetch 超时 |
+| `WEB_FETCH_MAX_CHARS` | 4000 | 注入上下文的网页正文上限 |
+| `WEB_MAX_URLS_PER_TURN` | 1 | 单轮最多抓取的 URL 数 |
 | `SEND_TIMEOUT_MS` | 8000 | QQ 单次发送上限 |
 | `MAX_IMAGES_PER_MESSAGE` | 4 | 当前消息图片上限 |
 | `STICKER_MAX_BYTES` | 1572864 | 单张 D1 base64 贴纸图片字节上限（1.5 MiB） |

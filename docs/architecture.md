@@ -172,6 +172,7 @@ QQ access token 与过期时间。
 | `src/store.js` | D1 读写 |
 | `src/memory.js` | 长期记忆整理：选会话、取区间、模型调用、写 digest 与画像、推进水位线、删除原文 |
 | `src/llm.js` | DeepSeek 调用与图片回退 |
+| `src/web.js` | DeepSeek Fetch 客户端：URL 提取、超时/错误映射、正文截断与网页资料块（BOT-025-01） |
 | `src/sender.js` | 单气泡 QQ 发送与有限网络重试 |
 | `src/token.js` | QQ access token 获取、D1 缓存与并发复用 |
 | `src/pure.js` | 消息解析、提示词消息构建、正文清理与气泡切分 |

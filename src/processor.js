@@ -15,6 +15,7 @@ import {
   PART_GAP_MAX_MS,
   SEND_BUDGET_RESERVE_MS,
   STICKER_SOURCE_URL_TTL_MS,
+  WEB_FETCH_TIMEOUT_MS,
   stickerCooldownMs,
   stickerReviewMonthlyLimit,
 } from "./config.js";
@@ -43,6 +44,7 @@ import {
 } from "./stickers.js";
 import { createStore } from "./store.js";
 import { createTokenManager } from "./token.js";
+import { createWebTools, extractUrls, formatWebContext } from "./web.js";
 
 import {
   buildGroupMessages,
@@ -101,6 +103,14 @@ function stickerUsageContext(content) {
   ).slice(0, 120);
 }
 
+function safeHost(url) {
+  try {
+    return new URL(url).host;
+  } catch {
+    return "invalid";
+  }
+}
+
 export function createProcessor(env, overrides = {}) {
   const deps = createDependencies(env, overrides);
 
@@ -108,6 +118,7 @@ export function createProcessor(env, overrides = {}) {
   const tokenManager = createTokenManager(deps);
   const llm = createLlmClient(deps);
   const sender = createReplySender(deps, tokenManager);
+  const web = createWebTools(deps);
 
   // D1 is the fact log: a message is recorded once, when the coordinator
   // accepts the event. `messages.event_id` keeps the write idempotent.
@@ -230,6 +241,80 @@ export function createProcessor(env, overrides = {}) {
       deps.logger.error("stage=token prefetch failed:", error);
       return null;
     });
+  }
+
+  // BOT-025-01: path A. The Worker decides from explicit URLs in the current
+  // batch, fetches once before the single reply call, and appends the result
+  // as untrusted reference material. A failed fetch only removes the block; it
+  // never blocks the normal reply.
+  async function loadWebContext(trigger, batchMessages, deadline) {
+    if (
+      String(deps.env.WEB_TOOLS_ENABLED ?? "").trim().toLowerCase() ===
+      "false"
+    ) {
+      deps.logger.log("stage=web tool=fetch skipped reason=disabled");
+      return null;
+    }
+
+    // Private batches are one-to-one; group batches only use the target's own
+    // messages. A link another member posted for someone else must not be
+    // fetched just because the target @-mentioned the bot in the same batch.
+    const sameSender = (message) => {
+      if (trigger.scope === "c2c") return true;
+      if (trigger.memberOpenid != null) {
+        return message.memberOpenid === trigger.memberOpenid;
+      }
+      return message.senderName === trigger.senderName;
+    };
+    const source = [
+      trigger.content,
+      ...batchMessages
+        .filter(
+          (message) =>
+            message.eventId !== trigger.eventId && sameSender(message),
+        )
+        .map((message) => message.content),
+    ]
+      .filter((text) => typeof text === "string" && text)
+      .join("\n");
+    const urls = extractUrls(source);
+
+    if (urls.length === 0) {
+      return null;
+    }
+
+    const budget =
+      deadline -
+      deps.now() -
+      SEND_BUDGET_RESERVE_MS -
+      MIN_STAGE_BUDGET_MS;
+    const timeoutMs = Math.min(WEB_FETCH_TIMEOUT_MS, budget);
+
+    if (timeoutMs < MIN_STAGE_BUDGET_MS) {
+      deps.logger.log("stage=web tool=fetch skipped reason=budget");
+      return null;
+    }
+
+    const pages = [];
+
+    for (const url of urls) {
+      try {
+        const page = await web.fetchPage(url, { timeoutMs });
+        pages.push(page);
+        deps.logger.log(
+          `stage=web tool=fetch status=ok host=${safeHost(url)} ` +
+            `ms=${page.elapsedMs} chars=${page.content.length}`,
+        );
+      } catch (error) {
+        deps.logger.log(
+          `stage=web tool=fetch status=error ` +
+            `code=${error?.status ?? "unknown"} ` +
+            `ms=${error?.elapsedMs ?? "?"}`,
+        );
+      }
+    }
+
+    return formatWebContext(pages, { now: deps.now() });
   }
 
   // Sends the validated bubbles one by one and records every state change in
@@ -1052,6 +1137,7 @@ export function createProcessor(env, overrides = {}) {
     tokenPromise,
     isCurrent,
     batchMeta,
+    webContext = null,
   ) {
     const imageCount = currentBatchImageCount(trigger);
     const hasImages = imageCount > 0;
@@ -1064,6 +1150,7 @@ export function createProcessor(env, overrides = {}) {
             includeImages,
             currentBatchEventIds: trigger.currentBatchEventIds,
             currentBatchImages: trigger.currentBatchImages,
+            webContext,
             now: deps.now(),
           }),
         {
@@ -1105,6 +1192,7 @@ export function createProcessor(env, overrides = {}) {
     isCurrent,
     batchMeta,
     continuation = false,
+    webContext = null,
   ) {
     const imageCount = currentBatchImageCount(trigger);
     const hasImages = imageCount > 0;
@@ -1120,6 +1208,7 @@ export function createProcessor(env, overrides = {}) {
             includeImages,
             currentBatchEventIds: trigger.currentBatchEventIds,
             currentBatchImages: trigger.currentBatchImages,
+            webContext,
             now: deps.now(),
           }),
         {
@@ -1404,6 +1493,10 @@ export function createProcessor(env, overrides = {}) {
     }
 
     const tokenPromise = prefetchToken();
+    const webContext =
+      route === "autonomous"
+        ? null
+        : await loadWebContext(trigger, messages, deadline);
 
     if (trigger.scope === "c2c") {
       return replyToPrivateMessage(
@@ -1413,6 +1506,7 @@ export function createProcessor(env, overrides = {}) {
         tokenPromise,
         context.isCurrent,
         batchMeta,
+        webContext,
       );
     }
 
@@ -1424,6 +1518,8 @@ export function createProcessor(env, overrides = {}) {
         tokenPromise,
         context.isCurrent,
         batchMeta,
+        false,
+        webContext,
       );
     }
 
@@ -1436,6 +1532,7 @@ export function createProcessor(env, overrides = {}) {
         context.isCurrent,
         batchMeta,
         true,
+        webContext,
       );
     }
 

@@ -44,6 +44,9 @@ QQ AI Bot is running.
 | `stage=sticker … result=failed reason=…` | 贴纸资源、上传或发送失败；查对应 outbox `failed/uncertain` 行，不能因上传成功就推断图片已发出 |
 | `stage=sticker-review id=… result=sent` | owner 主动私聊拉取的一张待确认贴纸已通过被动 C2C 回复发送；日志只含指纹短 ID，不含 URL/图片内容 |
 | `stage=sticker-vision id=… label=yes/no note=yes/no` | owner 私聊送图后的一次性识图初判；失败只影响建议文案，不影响编号和后续收录 |
+| `stage=web tool=fetch status=ok host=… ms=… chars=…` | 显式 URL 抓取成功；只记 host、耗时和正文长度，不记完整 URL/正文 |
+| `stage=web tool=fetch status=error code=… ms=…` | Fetch 失败（403/404/429/timeout/empty/network 等）已降级为无网页资料，正常回复继续 |
+| `stage=web tool=fetch skipped reason=disabled/budget` | 开关关闭或剩余预算不足，本轮不联网 |
 
 ## outbox 判定
 

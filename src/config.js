@@ -59,6 +59,12 @@ export const MAX_PROCESSING_ATTEMPTS = 3;
 
 export const LLM_TIMEOUT_MS = 12 * 1000;
 export const FALLBACK_RETRY_TIMEOUT_MS = 8 * 1000;
+
+// 网页工具（BOT-025-01）：DeepSeek Fetch 是独立 REST，不经过模型 tools，
+// 因此不需要 reasoning_content 回传。单轮只抓一个链接；失败只降级为无资料。
+export const WEB_FETCH_TIMEOUT_MS = 4 * 1000;
+export const WEB_FETCH_MAX_CHARS = 4000;
+export const WEB_MAX_URLS_PER_TURN = 1;
 export const TOKEN_TIMEOUT_MS = 5 * 1000;
 export const SEND_TIMEOUT_MS = 8 * 1000;
 export const SEND_RETRY_TIMEOUT_MS = 4 * 1000;
