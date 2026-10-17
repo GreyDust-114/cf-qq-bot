@@ -10,9 +10,14 @@ import {
   WEB_FETCH_MAX_CHARS,
   WEB_FETCH_TIMEOUT_MS,
   WEB_MAX_URLS_PER_TURN,
+  WEB_SEARCH_COUNT,
+  WEB_SEARCH_MAX_QUERY_CHARS,
+  WEB_SEARCH_MAX_RESULTS,
+  WEB_SEARCH_SUMMARY_MAX_CHARS,
+  WEB_SEARCH_TIMEOUT_MS,
 } from "./config.js";
 import { formatNowForPrompt } from "./pure.js";
-import { webContextPrompt } from "./prompts.js";
+import { searchContextPrompt, webContextPrompt } from "./prompts.js";
 
 const DEFAULT_WEB_BASE_URL = "https://api.deepseek.com";
 const URL_PATTERN = /https?:\/\/[^\s<>"'`，。！？；：、（）【】「」『』“”‘’]+/giu;
@@ -69,7 +74,94 @@ export function extractUrls(text, limit = WEB_MAX_URLS_PER_TURN) {
   return urls;
 }
 
-function clipContent(text, maxChars = WEB_FETCH_MAX_CHARS) {
+// BOT-025-02: path A uses local, testable rules instead of a model tool call.
+// Only explicit search verbs, time-sensitive topics, or news questions trigger;
+// URLs are handled by Fetch and take precedence.
+const SEARCH_VERB_PATTERN =
+  /(?:搜一下|搜一搜|搜搜|搜索|查一下|查一查|查查|查询|上网查|网上查)/u;
+const SELF_SEARCH_PATTERN =
+  /(?:^|[，。！？；：、,.!?;:\s])我(?:正在|在|去|来|刚)?(?:搜|查)/u;
+const TIME_MARKER_PATTERN =
+  /(?:今天|今晚|现在|目前|最近|最新|这两天|这周|本周|今年|刚才|刚刚)/u;
+const TOPIC_PATTERN =
+  /(?:新闻|热搜|股价|股票|比分|汇率|价格|报价|天气|气温|发布会|进展|消息)/u;
+const TERSE_TOPIC_PATTERN =
+  /(?:新闻|热搜|股价|股票|比分|汇率|价格|报价|天气|气温|发布会|消息|进展|更新)$/u;
+const NEGATION_PATTERN =
+  /(?:没|没有|无)(?:什么)?(?:新闻|热搜|消息|进展|更新)/u;
+const NEWS_PATTERN = /(?:新闻|热搜)/u;
+const QUESTION_PATTERN =
+  /(?:吗|呢|怎么|如何|多少|有没有|是什么|什么|？|\?)/u;
+
+function normalizeIntentText(text) {
+  return String(text ?? "")
+    .replace(/<@!?[^>]+>/gu, " ")
+    .replace(/【[^】]*】/gu, " ")
+    .replace(/\s+/gu, " ")
+    .trim();
+}
+
+function buildSearchQuery(source) {
+  return source
+    .replace(
+      /(^|[，。！？；：、,.!?;:\s])(?:帮我|给我|你|能不能|可不可以|麻烦)\s*/gu,
+      "$1",
+    )
+    .replace(
+      /(?:搜一下|搜一搜|搜搜|搜索|查一下|查一查|查查|查询|上网查|网上查)/gu,
+      " ",
+    )
+    .replace(/(?:怎么样|如何|怎么看|有什么|有哪些|是多少)/gu, "")
+    .replace(/[你我]$/u, "")
+    .replace(/[吗呢]$/u, "")
+    .replace(/^[\s，。！？；：、,.!?;:]+/u, "")
+    .replace(/[\s，。！？；：、,.!?;:]+$/u, "")
+    .replace(/\s+/gu, " ")
+    .trim()
+    .slice(0, WEB_SEARCH_MAX_QUERY_CHARS);
+}
+
+export function detectSearchIntent(text) {
+  const source = normalizeIntentText(text);
+
+  if (!source || extractUrls(source).length > 0) {
+    return null;
+  }
+
+  if (SELF_SEARCH_PATTERN.test(source)) {
+    return null;
+  }
+
+  const question = QUESTION_PATTERN.test(source);
+  const negated = NEGATION_PATTERN.test(source) && !question;
+  const explicit = SEARCH_VERB_PATTERN.test(source);
+  const timely =
+    !negated &&
+    TIME_MARKER_PATTERN.test(source) &&
+    TOPIC_PATTERN.test(source) &&
+    (question || TERSE_TOPIC_PATTERN.test(source));
+  const news =
+    !negated &&
+    NEWS_PATTERN.test(source) &&
+    (question || source.length <= 12);
+
+  if (!explicit && !timely && !news) {
+    return null;
+  }
+
+  const query = buildSearchQuery(source);
+
+  if (query.length < 2) {
+    return null;
+  }
+
+  return {
+    query,
+    trigger: explicit ? "explicit" : timely ? "time-sensitive" : "news",
+  };
+}
+
+function clipText(text, maxChars, label = "正文") {
   const value = String(text ?? "").trim();
 
   if (value.length <= maxChars) {
@@ -78,7 +170,7 @@ function clipContent(text, maxChars = WEB_FETCH_MAX_CHARS) {
 
   return (
     `${value.slice(0, maxChars)}\n` +
-    `…（正文已截断，原始 ${value.length} 字符）`
+    `…（${label}已截断，原始 ${value.length} 字符）`
   );
 }
 
@@ -149,14 +241,92 @@ export function createWebTools(deps) {
         typeof data?.title === "string"
           ? data.title.trim().slice(0, 200)
           : "",
-      content: clipContent(content),
+      content: clipText(content, WEB_FETCH_MAX_CHARS, "正文"),
       url,
       fetchedAt: deps.now(),
       elapsedMs,
     };
   }
 
-  return { fetchPage };
+  async function search(query, { timeoutMs = WEB_SEARCH_TIMEOUT_MS } = {}) {
+    const normalizedQuery = String(query ?? "")
+      .trim()
+      .slice(0, WEB_SEARCH_MAX_QUERY_CHARS);
+
+    if (!normalizedQuery) {
+      throw webError("invalid-query", 0);
+    }
+
+    const startedAt = deps.now();
+    let response;
+
+    try {
+      response = await deps.fetch(`${baseUrl}/v1/tools/search`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${deps.env.LLM_API_KEY}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          query: normalizedQuery,
+          count: WEB_SEARCH_COUNT,
+          need_content: false,
+        }),
+        signal: AbortSignal.timeout(timeoutMs),
+      });
+    } catch (error) {
+      throw webError(
+        error?.name === "TimeoutError" ? "timeout" : "network",
+        deps.now() - startedAt,
+      );
+    }
+
+    let body;
+
+    try {
+      body = await response.text();
+    } catch {
+      throw webError("network", deps.now() - startedAt);
+    }
+
+    const elapsedMs = deps.now() - startedAt;
+
+    if (!response.ok) {
+      throw webError(response.status, elapsedMs);
+    }
+
+    let data;
+
+    try {
+      data = JSON.parse(body);
+    } catch {
+      throw webError("invalid-json", elapsedMs);
+    }
+
+    const results = (Array.isArray(data?.results) ? data.results : [])
+      .filter(
+        (result) => result && typeof result.url === "string" && result.url,
+      )
+      .slice(0, WEB_SEARCH_MAX_RESULTS)
+      .map((result) => ({
+        title:
+          typeof result.title === "string"
+            ? result.title.trim().slice(0, 200)
+            : "",
+        url: result.url,
+        summary: clipText(
+          result.summary || result.snippet || "",
+          WEB_SEARCH_SUMMARY_MAX_CHARS,
+          "摘要",
+        ),
+        date: typeof result.date === "string" ? result.date : null,
+      }))
+      .filter((result) => result.summary);
+
+    return { results, elapsedMs };
+  }
+
+  return { fetchPage, search };
 }
 
 export function formatWebContext(pages, { now } = {}) {
@@ -166,4 +336,24 @@ export function formatWebContext(pages, { now } = {}) {
   }));
 
   return webContextPrompt(items);
+}
+
+function formatSearchDate(date) {
+  const value = String(date ?? "").trim();
+
+  if (!value) {
+    return "未知";
+  }
+
+  return value.slice(0, 10);
+}
+
+export function formatSearchContext(results, { now } = {}) {
+  const items = (Array.isArray(results) ? results : []).map((result) => ({
+    ...result,
+    searchedAtText: formatNowForPrompt(now),
+    publishedText: formatSearchDate(result?.date),
+  }));
+
+  return searchContextPrompt(items);
 }

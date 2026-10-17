@@ -65,6 +65,14 @@ export const FALLBACK_RETRY_TIMEOUT_MS = 8 * 1000;
 export const WEB_FETCH_TIMEOUT_MS = 4 * 1000;
 export const WEB_FETCH_MAX_CHARS = 4000;
 export const WEB_MAX_URLS_PER_TURN = 1;
+
+// 网页搜索（BOT-025-02）：只走本地显式意图 + 单次模型调用；
+// Search 与 Fetch 单轮二选一，URL 优先。
+export const WEB_SEARCH_TIMEOUT_MS = 4 * 1000;
+export const WEB_SEARCH_COUNT = 3;
+export const WEB_SEARCH_MAX_RESULTS = 3;
+export const WEB_SEARCH_SUMMARY_MAX_CHARS = 600;
+export const WEB_SEARCH_MAX_QUERY_CHARS = 128;
 export const TOKEN_TIMEOUT_MS = 5 * 1000;
 export const SEND_TIMEOUT_MS = 8 * 1000;
 export const SEND_RETRY_TIMEOUT_MS = 4 * 1000;

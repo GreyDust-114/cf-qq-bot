@@ -16,6 +16,7 @@ import {
   SEND_BUDGET_RESERVE_MS,
   STICKER_SOURCE_URL_TTL_MS,
   WEB_FETCH_TIMEOUT_MS,
+  WEB_SEARCH_TIMEOUT_MS,
   stickerCooldownMs,
   stickerReviewMonthlyLimit,
 } from "./config.js";
@@ -44,7 +45,13 @@ import {
 } from "./stickers.js";
 import { createStore } from "./store.js";
 import { createTokenManager } from "./token.js";
-import { createWebTools, extractUrls, formatWebContext } from "./web.js";
+import {
+  createWebTools,
+  detectSearchIntent,
+  extractUrls,
+  formatSearchContext,
+  formatWebContext,
+} from "./web.js";
 
 import {
   buildGroupMessages,
@@ -243,16 +250,17 @@ export function createProcessor(env, overrides = {}) {
     });
   }
 
-  // BOT-025-01: path A. The Worker decides from explicit URLs in the current
-  // batch, fetches once before the single reply call, and appends the result
-  // as untrusted reference material. A failed fetch only removes the block; it
-  // never blocks the normal reply.
+  // BOT-025-01/02: path A. The Worker decides from explicit URLs or search
+  // intent in the current batch, runs at most one external tool before the
+  // single reply call, and appends the result as untrusted reference material.
+  // A URL takes precedence; a failed tool only removes the block and never
+  // blocks the normal reply.
   async function loadWebContext(trigger, batchMessages, deadline) {
     if (
       String(deps.env.WEB_TOOLS_ENABLED ?? "").trim().toLowerCase() ===
       "false"
     ) {
-      deps.logger.log("stage=web tool=fetch skipped reason=disabled");
+      deps.logger.log("stage=web tool=web skipped reason=disabled");
       return null;
     }
 
@@ -278,43 +286,80 @@ export function createProcessor(env, overrides = {}) {
       .filter((text) => typeof text === "string" && text)
       .join("\n");
     const urls = extractUrls(source);
+    const toolBudget = () =>
+      deadline - deps.now() - SEND_BUDGET_RESERVE_MS - MIN_STAGE_BUDGET_MS;
 
-    if (urls.length === 0) {
+    if (urls.length > 0) {
+      const timeoutMs = Math.min(WEB_FETCH_TIMEOUT_MS, toolBudget());
+
+      if (timeoutMs < MIN_STAGE_BUDGET_MS) {
+        deps.logger.log("stage=web tool=fetch skipped reason=budget");
+        return null;
+      }
+
+      const pages = [];
+
+      for (const url of urls) {
+        try {
+          const page = await web.fetchPage(url, { timeoutMs });
+          pages.push(page);
+          deps.logger.log(
+            `stage=web tool=fetch status=ok host=${safeHost(url)} ` +
+              `ms=${page.elapsedMs} chars=${page.content.length}`,
+          );
+        } catch (error) {
+          deps.logger.log(
+            `stage=web tool=fetch status=error ` +
+              `code=${error?.status ?? "unknown"} ` +
+              `ms=${error?.elapsedMs ?? "?"}`,
+          );
+        }
+      }
+
+      return formatWebContext(pages, { now: deps.now() });
+    }
+
+    const intent = detectSearchIntent(source);
+
+    if (!intent) {
       return null;
     }
 
-    const budget =
-      deadline -
-      deps.now() -
-      SEND_BUDGET_RESERVE_MS -
-      MIN_STAGE_BUDGET_MS;
-    const timeoutMs = Math.min(WEB_FETCH_TIMEOUT_MS, budget);
+    const timeoutMs = Math.min(WEB_SEARCH_TIMEOUT_MS, toolBudget());
 
     if (timeoutMs < MIN_STAGE_BUDGET_MS) {
-      deps.logger.log("stage=web tool=fetch skipped reason=budget");
+      deps.logger.log("stage=web tool=search skipped reason=budget");
       return null;
     }
 
-    const pages = [];
+    try {
+      const { results, elapsedMs } = await web.search(intent.query, {
+        timeoutMs,
+      });
 
-    for (const url of urls) {
-      try {
-        const page = await web.fetchPage(url, { timeoutMs });
-        pages.push(page);
+      if (results.length === 0) {
         deps.logger.log(
-          `stage=web tool=fetch status=ok host=${safeHost(url)} ` +
-            `ms=${page.elapsedMs} chars=${page.content.length}`,
+          `stage=web tool=search status=empty trigger=${intent.trigger} ` +
+            `queryChars=${intent.query.length} ms=${elapsedMs}`,
         );
-      } catch (error) {
-        deps.logger.log(
-          `stage=web tool=fetch status=error ` +
-            `code=${error?.status ?? "unknown"} ` +
-            `ms=${error?.elapsedMs ?? "?"}`,
-        );
+        return null;
       }
-    }
 
-    return formatWebContext(pages, { now: deps.now() });
+      deps.logger.log(
+        `stage=web tool=search status=ok trigger=${intent.trigger} ` +
+          `results=${results.length} queryChars=${intent.query.length} ` +
+          `ms=${elapsedMs}`,
+      );
+
+      return formatSearchContext(results, { now: deps.now() });
+    } catch (error) {
+      deps.logger.log(
+        `stage=web tool=search status=error ` +
+          `code=${error?.status ?? "unknown"} ` +
+          `ms=${error?.elapsedMs ?? "?"}`,
+      );
+      return null;
+    }
   }
 
   // Sends the validated bubbles one by one and records every state change in
