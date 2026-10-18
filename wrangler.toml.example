@@ -36,6 +36,9 @@ new_sqlite_classes = ["ConversationHub"]
 QQ_APP_ID = ""
 LLM_BASE_URL = "https://api.deepseek.com"
 LLM_MODEL = "deepseek-flash"
+# BOT-025 web tools: explicit URL fetch and explicit search. Set to "false"
+# to disable both and fall back to the no-web-context baseline.
+WEB_TOOLS_ENABLED = "true"
 # Gray-release restriction: only respond in this group openid; empty means
 # no restriction.
 ALLOWED_GROUP_OPENID = ""

@@ -21,6 +21,9 @@ Durable Object: ConversationHub
        ├─ messages
        ├─ lore
        ├─ memory_digests
+       ├─ sticker_semantics
+       ├─ sticker_assets
+       ├─ sticker_usage
        ├─ outbox
        └─ settings
 
@@ -38,7 +41,7 @@ Cloudflare Cron（UTC `0 20 * * *` = 北京时间 04:00）
 3. 入站消息立即写入 D1 `messages`，重复 `event_id` 被忽略。
 4. 协调器增加 revision、追加 pending，并设置尾随静默窗口 alarm。
 5. alarm 把 pending 消息形成一个批次，记录 batch revision 与 lease。
-6. 处理器加载 D1 上下文并调用 DeepSeek。
+6. 处理器加载 D1 上下文；若当前批次目标命中显式 URL 或显式搜索意图，先由 `src/web.js` 调用 DeepSeek Fetch/Search，把结果作为不可信资料注入，再调用 DeepSeek。
 7. 发送前与每个气泡之间检查 revision / lease；新消息会停止过时回复。
 8. 每个气泡先写 outbox `pending`，成功后写独立 assistant message 并标记 `sent`。
 9. 失败或结果不确定分别标记为 `failed` / `uncertain`。
@@ -173,6 +176,9 @@ QQ access token 与过期时间。
 | `src/memory.js` | 长期记忆整理：选会话、取区间、模型调用、写 digest 与画像、推进水位线、删除原文 |
 | `src/llm.js` | DeepSeek 调用与图片回退 |
 | `src/web.js` | DeepSeek Fetch/Search 客户端：URL 提取、本地显式搜索意图、超时/错误映射、正文/摘要截断与资料块（BOT-025） |
+| `src/reply-safety.js` | 高置信内部控制语检查；命中时整轮拒发，日志不记录风险原文 |
+| `src/stickers.js` | 贴纸指纹、素材 MIME/大小校验、owner 语义与使用场景记录 |
+| `src/sticker-media.js` | 短时 HMAC 签名贴纸图片 URL 的生成与校验 |
 | `src/sender.js` | 单气泡 QQ 发送与有限网络重试 |
 | `src/token.js` | QQ access token 获取、D1 缓存与并发复用 |
 | `src/pure.js` | 消息解析、提示词消息构建、正文清理与气泡切分 |

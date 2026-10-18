@@ -38,6 +38,8 @@
 | `CONTEXT_MAX_MESSAGES` | 400 | 上下文消息条数上限（按灰度群频率约等于 2 天活跃内容） |
 | `CONTEXT_ANCHOR_SLACK_MESSAGES` | 200 | 窗口起点锚点的松弛量：条数超过 400+200 时才整体前移一次锚点 |
 | `CONTEXT_MAX_CHARS` | 60000 | 上下文字符上限（超出时从最旧一端裁剪） |
+| `STORED_CONTENT_MAX_CHARS` | 2000 | 入站消息与记忆写入 D1 时的正文截断上限 |
+| `MAX_REPLY_CHARS` | 1800 | 单条最终气泡的防御性截断上限（40 字总预算之外的第二道保险） |
 | `MAX_REPLY_PARTS` | 4 | 解析层气泡硬上限（提示词通常 1 条、最多 3 条） |
 | `BUBBLE_TARGET_MAX_CHARS` | 12 | 单条气泡目标长度 |
 | `MAX_REPLY_TOTAL_CHARS` | 40 | 单次回复硬字数预算（提示词软引导 20 字、被问设定时 30 字） |
@@ -51,7 +53,10 @@
 | `PROCESSING_RETRY_DELAY_MS` | 5000 | 批次失败重试间隔 |
 | `MAX_PROCESSING_ATTEMPTS` | 3 | 批次最大处理次数 |
 | `INVOCATION_BUDGET_MS` | 28000 | 单次批次内部时间预算 |
+| `MIN_STAGE_BUDGET_MS` | 2000 | 单个模型阶段的最小可用预算；不足时跳过该阶段 |
+| `SEND_BUDGET_RESERVE_MS` | 8000 | 为 QQ 发送预留的预算 |
 | `LLM_TIMEOUT_MS` | 12000 | 模型调用上限 |
+| `FALLBACK_RETRY_TIMEOUT_MS` | 8000 | 视觉调用失败后纯文本重试的超时 |
 | `WEB_FETCH_TIMEOUT_MS` | 4000 | 单次 DeepSeek Fetch 超时 |
 | `WEB_FETCH_MAX_CHARS` | 4000 | 注入上下文的网页正文上限 |
 | `WEB_MAX_URLS_PER_TURN` | 1 | 单轮最多抓取的 URL 数 |
@@ -61,7 +66,13 @@
 | `WEB_SEARCH_SUMMARY_MAX_CHARS` | 600 | 单条搜索结果摘要上限 |
 | `WEB_SEARCH_MAX_QUERY_CHARS` | 128 | 搜索词上限（DeepSeek 接口限制） |
 | `SEND_TIMEOUT_MS` | 8000 | QQ 单次发送上限 |
+| `SEND_RETRY_TIMEOUT_MS` | 4000 | QQ 发送网络重试的超时 |
+| `TOKEN_TIMEOUT_MS` | 5000 | QQ access token 获取超时 |
 | `MAX_IMAGES_PER_MESSAGE` | 4 | 当前消息图片上限 |
+| `MAX_IMAGES_PER_BATCH` | 4 | 每次模型调用的批次图片上限 |
+| `MAX_IMAGE_BYTES` | 20 MiB | 单张图片 URL 声明大小上限 |
+| `MAX_IMAGE_URL_LENGTH` | 8192 | 图片 URL 长度上限 |
+| `MAX_FACE_EXT_BYTES` | 64 KiB | 表情 `ext` base64 大小上限 |
 | `STICKER_MAX_BYTES` | 1572864 | 单张 D1 base64 贴纸图片字节上限（1.5 MiB） |
 | `STICKER_MEDIA_URL_TTL_SECONDS` | 180 | QQ 拉取贴纸资源的签名 URL 有效期 |
 | `STICKER_COOLDOWN_MS` | 1800000 | 每个会话贴纸发送最小间隔（可由环境变量覆盖） |

@@ -21,6 +21,7 @@
 - 每日长期记忆整理：超过压缩期的原文压成区间摘要与长期画像，原文删除默认 dry-run
 - `pending / sent / failed / uncertain` 可靠发送状态
 - 图片消息、多模态失败回退与正文格式清理
+- 显式 URL 抓取与显式意图搜索：Worker 先调 DeepSeek Fetch/Search，再把网页资料作为不可信资料注入同一次回复（`WEB_TOOLS_ENABLED` 可整体关闭）
 - 贴纸 SHA-256 语义库、owner 私聊识图收录与标签修订、出站贴纸目录和独立富媒体气泡（BOT-020/021 联合；生产启用需明确授权迁移、导入素材并联合灰度）
 
 ## 架构概览
@@ -35,9 +36,9 @@ Cloudflare Worker
           ▼
 Durable Object: ConversationHub
    ├─ alarm / batch / revision / lease
-   ├─ DeepSeek API
+   ├─ DeepSeek API / Fetch / Search
    ├─ QQ OpenAPI
-   └─ D1: conversations / messages / lore / memory_digests / outbox / settings
+   └─ D1: conversations / messages / lore / memory_digests / sticker_semantics / sticker_assets / sticker_usage / outbox / settings
 
 Cloudflare Cron（北京时间每天 04:00）
    └─ 长期记忆整理：过期原文 → 区间摘要 + 长期画像（默认 dry-run，不删原文）
@@ -68,13 +69,13 @@ npx wrangler d1 migrations apply qq-ai-bot-db --remote
 npm run deploy
 ```
 
-部署前需要在本地 `wrangler.toml` 配置 D1、QQ AppID、模型和灰度群。**远程 D1 migration 必须取得维护者明确授权**，Worker 部署授权不自动包含 migration；BOT-020/021 贴纸功能需联合发布。完整步骤见 [部署文档](docs/deployment.md)。
+部署前需要在本地 `wrangler.toml` 配置 D1、QQ AppID、模型和灰度群。**远程 D1 migration 必须取得维护者明确授权**，Worker 部署授权不自动包含 migration；BOT-020/021 贴纸功能需联合发布；网页搜索/抓取由 `WEB_TOOLS_ENABLED` 控制（默认开启），关闭后回到无网页资料基线。完整步骤见 [部署文档](docs/deployment.md)。
 
 ## 仓库范围
 
 公开仓库保留主要源码、D1 migrations、Cloudflare 配置和正式文档。
 
-维护者本地的测试、测试 adapter、工程 Runtime、审查截图、Git hooks、辅助脚本、`.dev.vars` 与含真实环境标识的 `wrangler.toml` 不进入 GitHub 当前文件树；这些文件仍可在维护者工作区中使用，`npm test`、`npm run verify` 等脚本因此只在维护者工作区可用。
+维护者本地的测试、测试 adapter、工程 Runtime、审查截图、Git hooks、辅助脚本、`.dev.vars` 与含真实环境标识的 `wrangler.toml` 不进入 GitHub 当前文件树；这些文件仍可在维护者工作区中使用，`npm test`、`npm run verify` 等脚本因此只在维护者工作区可用。本地 Runtime 的数据契约与任务视图见 `runtime/README.md`、`runtime/TODO.md`（不进入公开仓库）。
 
 ## 文档
 

@@ -122,6 +122,14 @@ QQ AI Bot is running.
 - 单发贴纸默认沉默应看到 `Decision: no reply (sticker only)`；被 @、被引用或活跃续聊时不适用。
 - 若回复仍在猜贴纸内容/画面：检查提示词版本与部署产物（当前消息应带贴纸说明）；语义积累（指纹、标签、私聊询问 owner）在 `BOT-020`，未上线前不要指望机器人认得出具体贴纸。
 
+### 网页工具未触发或被关闭
+
+- 先确认 `WEB_TOOLS_ENABLED`；为 `false` 时日志会出现 `stage=web tool=web skipped reason=disabled`，回复按无网页资料继续。
+- `autonomous` 路由不联网；只有 @、私聊或明确续聊的当前批次目标会触发。
+- 有 `http(s)://` 链接时优先 Fetch；没有链接时只有显式搜索意图才 Search，单轮二选一。
+- `stage=web ... skipped reason=budget` 表示剩余调用预算不足；`stage=web tool=search status=empty` 表示搜索正常返回但没有结果。
+- 日志只记 host、耗时、结果数、查询字符数和错误码；排查用脱敏/自造样例，不复制真实 URL、查询原文或网页正文。
+
 ## 已知限制
 
 - 原始上下文窗口 72 小时 / 400 条 / 6 万字符；窗口外的内容由每日整理出的画像与 digest 承担（删除默认关闭，先 dry_run）

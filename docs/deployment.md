@@ -74,6 +74,7 @@ npx wrangler secret put LLM_API_KEY
 - `MEMORY_DRY_RUN`：`"true"`（默认）只报告不删除；试运行 3 天后改为 `"false"` 才开启删除；
 - `MEMORY_RETENTION_DAYS`：原文保留天数（先 `30`，观察一周后收到 `7`）；删除只发生在这个边界之外；
 - `MEMORY_COMPACT_AFTER_DAYS`：超过多少天的消息开始压缩进 digest（默认 `2`，与保留期无关，保证读窗口之外的内容尽快变成记忆）；
+- `WEB_TOOLS_ENABLED`：`"false"` 关闭显式 URL 抓取与显式搜索，默认开启；关闭后回到无网页资料基线；
 - `STICKER_MEDIA_BASE_URL`：公网可访问的 Worker HTTPS origin（如 `https://<worker>.workers.dev`），QQ 媒体服务通过短时签名 URL 拉取 D1 图片；
 - `STICKER_COOLDOWN_MS`：每会话贴纸发送间隔（毫秒，默认 1800000）；
 - `STICKER_OWNER_OPENID`：owner 的 C2C openid；owner 私聊送贴纸后可用“收录贴纸/确认贴纸/纠正贴纸/贴纸详情/忽略贴纸”管理，不能依赖已停用的主动推送；
@@ -138,6 +139,7 @@ npx wrangler deploy --dry-run --outdir dist
 - `LLM_BASE_URL`
 - `LLM_MODEL`
 - `ALLOWED_GROUP_OPENID`
+- `WEB_TOOLS_ENABLED`
 - `STICKER_MEDIA_BASE_URL`
 - `STICKER_COOLDOWN_MS`
 - `STICKER_OWNER_OPENID`
