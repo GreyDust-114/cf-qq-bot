@@ -51,8 +51,42 @@ QQ AI Bot is running.
 | `stage=web ... status=denied` | 策略拒绝（403/451），已降级 |
 | `stage=web ... status=error` | 其他失败：带 `http` 或 `code`（`network` / `invalid-json` / 400 / 5xx 等） |
 | `stage=web tool=web status=skipped reason=no-trigger` | 本轮没有显式 URL 或搜索意图，不联网 |
+| `stage=web ... status=skipped reason=session-disabled` | owner 已关闭本会话联网 |
+| `stage=web ... status=skipped reason=rate-limited` | 429 冷却中，本轮不联网 |
+| `stage=web ... status=skipped reason=failure-threshold` | 失败率熔断中，本轮不联网 |
 | `stage=web ... status=skipped reason=disabled` | `WEB_TOOLS_ENABLED=false`，网页工具整体关闭 |
 | `stage=web ... status=skipped reason=budget` | 剩余预算不足，本轮对应的外部工具不执行 |
+| `stage=web control=session target=… enabled=… saved=…` | owner 切换会话联网开关；`target` 为 `current` / `allowed-group` / `explicit`，不记录具体 openid；`saved=false` 表示 D1 写入失败 |
+
+## 网页工具开关与配额
+
+- **全局**：`WEB_TOOLS_ENABLED=false` 关闭所有会话，需要重新部署。
+- **会话**：owner（`STICKER_OWNER_OPENID`）在私聊发送：
+  - `关联网` / `开联网`：切换当前私聊；
+  - `关联网 群` / `开联网 群`：切换唯一的 `ALLOWED_GROUP_OPENID`；未配置唯一灰度群时提示改用显式目标；
+  - `关联网 group:<group_openid>` / `开联网 group:<group_openid>`：切换指定群（`group_openid` 可从 `conversationId=group:…` 的日志取得）。
+
+  状态存在 D1 `settings` 的 `web:control:<conversationId>`，重启不丢，会话之间隔离。QQ 群 `member_openid` 与私聊 `user_openid`、不同群的 `member_openid` 均不同，因此群内发言不能作为管理命令，避免误授权。
+- **429 冷却**：收到 429 后本会话暂停联网 60 秒（`WEB_429_COOLDOWN_MS`）；冷却期间日志为 `status=skipped reason=rate-limited`。
+- **失败熔断**：本会话最近 20 次真实调用（`WEB_FAILURE_WINDOW`）里失败超过一半（`WEB_FAILURE_RATE_THRESHOLD`）时暂停 5 分钟（`WEB_FAILURE_BLOCK_MS`）；`ok` / `empty` 不算失败，跳过的轮次不进入窗口。熔断到期后的第一次成功会清空旧窗口，失败则继续熔断。
+
+按天统计直接基于日志字段：
+
+| 指标 | 口径 |
+|---|---|
+| 成功次数 | `stage=web` 且 `status=ok`，按 `tool=fetch` / `tool=search` 分开计数 |
+| 失败分布 | 按 `status=rate_limited` / `timeout` / `denied` / `error` 分组 |
+| 延迟 | 取同一天 `ms=` 的平均值或 P90 |
+| 成本 | 只统计成功请求：`(fetch ok + search ok) / 1000 × 5 元`；空结果、失败、超时不计费，最终以 DeepSeek 账单为准 |
+
+日志导出方式取决于是否启用 Cloudflare Logpush；未启用时只能用 `npx wrangler tail` 现场观察，不能把一次 tail 当成完整日账。
+
+灰度与回滚：
+
+1. 先只关目标会话（owner 私聊发“关联网”或“关联网 群”），观察其他会话是否正常；
+2. 异常扩大时再把 `WEB_TOOLS_ENABLED` 设为 `false` 并重新部署；
+3. 回滚代码时 D1 里的 `web:control:*` 行可以保留，旧代码不会读取；
+4. 需要重置某个会话的开关/冷却时，删除对应的 `web:control:<conversationId>` 行；远程 D1 操作需要维护者明确授权。
 
 ## outbox 判定
 

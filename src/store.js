@@ -1070,6 +1070,49 @@ export function createStore(deps) {
     return Number(result.meta?.changes ?? 0);
   }
 
+  // ── 网页工具会话开关与熔断（BOT-025-03 S2）──────────────
+  //
+  // 一个会话一行 JSON：{ enabled, outcomes, blockUntil, blockReason }。
+  // 读取失败按“无状态”处理（fail-open）；写入失败只记日志，不阻断回复。
+  function webControlKey(conversationId) {
+    return `web:control:${conversationId}`;
+  }
+
+  async function loadWebControl(conversationId) {
+    try {
+      const row = await db()
+        .prepare(`SELECT value FROM settings WHERE key = ?`)
+        .bind(webControlKey(conversationId))
+        .first();
+
+      if (!row?.value) return null;
+
+      return JSON.parse(row.value);
+    } catch (error) {
+      deps.logger.error("stage=web control read failed:", error);
+      return null;
+    }
+  }
+
+  async function saveWebControl(conversationId, control) {
+    try {
+      await db()
+        .prepare(
+          `INSERT INTO settings (key, value, expires_at)
+           VALUES (?, ?, NULL)
+           ON CONFLICT(key)
+           DO UPDATE SET value = excluded.value, expires_at = NULL`,
+        )
+        .bind(webControlKey(conversationId), JSON.stringify(control))
+        .run();
+
+      return true;
+    } catch (error) {
+      deps.logger.error("stage=web control write failed:", error);
+      return false;
+    }
+  }
+
   return {
     ensureConversation,
     storeIncomingMessage,
@@ -1117,5 +1160,7 @@ export function createStore(deps) {
     commitMemoryProgress,
     countMessagesBefore,
     deleteMessagesBefore,
+    loadWebControl,
+    saveWebControl,
   };
 }

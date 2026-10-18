@@ -49,9 +49,13 @@ import {
   classifyWebError,
   createWebTools,
   detectSearchIntent,
+  evaluateWebPolicy,
   extractUrls,
   formatSearchContext,
   formatWebContext,
+  parseOwnerWebCommand,
+  recordWebOutcome,
+  setWebControlEnabled,
   webLogLine,
 } from "./web.js";
 
@@ -258,15 +262,36 @@ export function createProcessor(env, overrides = {}) {
   // A URL takes precedence; a failed tool only removes the block and never
   // blocks the normal reply.
   async function loadWebContext(trigger, batchMessages, deadline) {
-    if (
-      String(deps.env.WEB_TOOLS_ENABLED ?? "").trim().toLowerCase() ===
-      "false"
-    ) {
+    const conversationId = trigger.conversationId;
+    const globalEnabled =
+      String(deps.env.WEB_TOOLS_ENABLED ?? "").trim().toLowerCase() !==
+      "false";
+
+    if (!globalEnabled) {
       deps.logger.log(
         webLogLine({ tool: "web", status: "skipped", reason: "disabled" }),
       );
       return null;
     }
+
+    let control = await store.loadWebControl(conversationId);
+    const policy = evaluateWebPolicy({ control, now: deps.now() });
+
+    if (!policy.allowed) {
+      deps.logger.log(
+        webLogLine({
+          tool: "web",
+          status: "skipped",
+          reason: policy.reason,
+        }),
+      );
+      return null;
+    }
+
+    const noteOutcome = async (status) => {
+      control = recordWebOutcome(control, status, deps.now());
+      await store.saveWebControl(conversationId, control);
+    };
 
     // Private batches are one-to-one; group batches only use the target's own
     // messages. A link another member posted for someone else must not be
@@ -320,14 +345,18 @@ export function createProcessor(env, overrides = {}) {
               chars: page.content.length,
             }),
           );
+          await noteOutcome("ok");
         } catch (error) {
+          const failure = classifyWebError(error);
+
           deps.logger.log(
             webLogLine({
               tool: "fetch",
-              ...classifyWebError(error),
+              ...failure,
               host: safeHost(url),
             }),
           );
+          await noteOutcome(failure.status);
         }
       }
 
@@ -378,6 +407,7 @@ export function createProcessor(env, overrides = {}) {
             chars: 0,
           }),
         );
+        await noteOutcome("empty");
         return null;
       }
 
@@ -392,12 +422,16 @@ export function createProcessor(env, overrides = {}) {
           chars,
         }),
       );
+      await noteOutcome("ok");
 
       return formatSearchContext(results, { now: deps.now() });
     } catch (error) {
+      const failure = classifyWebError(error);
+
       deps.logger.log(
-        webLogLine({ tool: "search", ...classifyWebError(error) }),
+        webLogLine({ tool: "search", ...failure }),
       );
+      await noteOutcome(failure.status);
       return null;
     }
   }
@@ -913,6 +947,92 @@ export function createProcessor(env, overrides = {}) {
       prefetchToken(),
       isCurrent,
       reviewMeta,
+    );
+  }
+
+  function resolveWebCommandConversation(command, trigger) {
+    if (command.target === "current") {
+      return trigger.conversationId;
+    }
+
+    if (command.target === "allowed-group") {
+      const groupOpenid = String(
+        deps.env.ALLOWED_GROUP_OPENID ?? "",
+      ).trim();
+
+      // The alias only makes sense with one gray group; with an empty or
+      // multi-group allowlist the owner must use group:<openid> explicitly.
+      if (!groupOpenid || groupOpenid.includes(",")) return null;
+
+      return `group:${groupOpenid}`;
+    }
+
+    return command.target.startsWith("group:") ? command.target : null;
+  }
+
+  async function handleOwnerWebCommand(
+    trigger,
+    command,
+    deadline,
+    isCurrent,
+    batchMeta,
+  ) {
+    const conversationId = resolveWebCommandConversation(command, trigger);
+
+    if (!conversationId) {
+      return sendAndStore(
+        trigger,
+        [
+          "未配置唯一的 ALLOWED_GROUP_OPENID，无法定位群；可用“关联网/开联网 group:<group_openid>”指定。",
+        ],
+        deadline,
+        prefetchToken(),
+        isCurrent,
+        { ...batchMeta, route: "web-control" },
+      );
+    }
+
+    const globalEnabled =
+      String(deps.env.WEB_TOOLS_ENABLED ?? "").trim().toLowerCase() !==
+      "false";
+    const control = await store.loadWebControl(conversationId);
+    const saved = await store.saveWebControl(
+      conversationId,
+      setWebControlEnabled(control, command.enabled),
+    );
+    const targetLabel =
+      command.target === "current"
+        ? "本会话"
+        : command.target === "allowed-group"
+          ? "灰度群"
+          : "指定群";
+    const targetLog =
+      command.target === "current"
+        ? "current"
+        : command.target === "allowed-group"
+          ? "allowed-group"
+          : "explicit";
+
+    deps.logger.log(
+      `stage=web control=session target=${targetLog} ` +
+        `enabled=${command.enabled} saved=${saved}`,
+    );
+
+    const reply = !saved
+      ? "联网开关保存失败，请稍后再试。"
+      : command.enabled
+        ? globalEnabled
+          ? `${targetLabel}联网已开启。`
+          : `${targetLabel}联网已开启；但全局 WEB_TOOLS_ENABLED 仍为 false。`
+        : `${targetLabel}联网已关闭。`;
+
+    return sendAndStore(
+      trigger,
+      [reply],
+      deadline,
+      prefetchToken(),
+      isCurrent,
+      { ...batchMeta, route: "web-control" },
     );
   }
 
@@ -1543,6 +1663,30 @@ export function createProcessor(env, overrides = {}) {
         return handleOwnerStickerCommand(
           trigger,
           ownerCommand,
+          deadline,
+          context.isCurrent,
+          batchMeta,
+        );
+      }
+    }
+
+    // BOT-025-03 S2: the owner switches web tools from the private chat. QQ
+    // group member_openid differs from the C2C user_openid and from group to
+    // group, so a group message cannot be authenticated with this env value.
+    // `群` targets the single ALLOWED_GROUP_OPENID; group:<openid> is explicit.
+    const ownerOpenid = deps.env.STICKER_OWNER_OPENID;
+    const ownerHere =
+      Boolean(ownerOpenid) &&
+      trigger.scope === "c2c" &&
+      trigger.targetId === ownerOpenid;
+
+    if (ownerHere) {
+      const webCommand = parseOwnerWebCommand(trigger.content);
+
+      if (webCommand) {
+        return handleOwnerWebCommand(
+          trigger,
+          webCommand,
           deadline,
           context.isCurrent,
           batchMeta,

@@ -136,7 +136,7 @@ Worker 不执行长时间模型生成；实际会话处理在 Durable Object ala
 
 ### settings
 
-QQ access token 与过期时间。
+QQ access token 与过期时间；`web:control:<conversationId>` 保存网页工具会话开关、最近调用结果窗口和熔断截止时间，按会话隔离，读取失败按无状态处理。
 
 ### memory_digests
 

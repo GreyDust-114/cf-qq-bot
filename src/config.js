@@ -73,6 +73,13 @@ export const WEB_SEARCH_COUNT = 3;
 export const WEB_SEARCH_MAX_RESULTS = 3;
 export const WEB_SEARCH_SUMMARY_MAX_CHARS = 600;
 export const WEB_SEARCH_MAX_QUERY_CHARS = 128;
+
+// 网页工具运维边界（BOT-025-03 S2）：429 冷却与失败熔断都按会话隔离。
+// 默认值保持当前行为，只在真实请求入口生效。
+export const WEB_429_COOLDOWN_MS = 60 * 1000;
+export const WEB_FAILURE_WINDOW = 20;
+export const WEB_FAILURE_RATE_THRESHOLD = 0.5;
+export const WEB_FAILURE_BLOCK_MS = 5 * 60 * 1000;
 export const TOKEN_TIMEOUT_MS = 5 * 1000;
 export const SEND_TIMEOUT_MS = 8 * 1000;
 export const SEND_RETRY_TIMEOUT_MS = 4 * 1000;

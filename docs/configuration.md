@@ -25,7 +25,7 @@
 | `MEMORY_COMPACT_AFTER_DAYS` | 变量 | 长期记忆：超过多少天的消息开始压缩（默认 `2`，与保留期无关） |
 | `STICKER_MEDIA_BASE_URL` | 变量 | BOT-021：QQ 服务端可访问的 HTTPS Worker origin，用于短时签名 D1 贴纸图片 URL；未配置时贴纸发送安全失败 |
 | `STICKER_COOLDOWN_MS` | 变量 | BOT-021：同一会话任意贴纸之间的最小间隔，毫秒，默认 `1800000`（30 分钟），最大按 24 小时截断；同一张连续使用始终禁止 |
-| `STICKER_OWNER_OPENID` | 变量 | BOT-020：owner 的 QQ C2C openid，用于识别私聊送图、“待确认贴纸”以及“收录/确认/纠正/详情/忽略贴纸”命令；不是群成员 openid |
+| `STICKER_OWNER_OPENID` | 变量 | BOT-020：owner 的 QQ C2C openid，用于识别私聊送图、“待确认贴纸”以及“收录/确认/纠正/详情/忽略贴纸”命令；同时用于 BOT-025-03 私聊里的“关联网/开联网”命令。QQ 群 `member_openid` 与 C2C `user_openid` 不同，群消息不作为管理命令 |
 | `STICKER_REVIEW_MONTHLY_LIMIT` | 变量 | BOT-020：每月最多被动回复几张待确认贴纸，默认 `2`，最多配置 `4`；owner 必须先私聊发起，不使用已停用的 C2C 主动推送 |
 
 ## 核心参数
@@ -65,6 +65,10 @@
 | `WEB_SEARCH_MAX_RESULTS` | 3 | 注入上下文的最多结果数 |
 | `WEB_SEARCH_SUMMARY_MAX_CHARS` | 600 | 单条搜索结果摘要上限 |
 | `WEB_SEARCH_MAX_QUERY_CHARS` | 128 | 搜索词上限（DeepSeek 接口限制） |
+| `WEB_429_COOLDOWN_MS` | 60000 | 429 后该会话暂停联网的时长 |
+| `WEB_FAILURE_WINDOW` | 20 | 本会话失败率统计的最近真实调用次数（跳过轮次不计入） |
+| `WEB_FAILURE_RATE_THRESHOLD` | 0.5 | 失败率超过该比例（>50%）时触发熔断 |
+| `WEB_FAILURE_BLOCK_MS` | 300000 | 熔断后暂停联网的时长 |
 | `SEND_TIMEOUT_MS` | 8000 | QQ 单次发送上限 |
 | `SEND_RETRY_TIMEOUT_MS` | 4000 | QQ 发送网络重试的超时 |
 | `TOKEN_TIMEOUT_MS` | 5000 | QQ access token 获取超时 |

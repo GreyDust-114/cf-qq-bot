@@ -21,7 +21,7 @@
 - 每日长期记忆整理：超过压缩期的原文压成区间摘要与长期画像，原文删除默认 dry-run
 - `pending / sent / failed / uncertain` 可靠发送状态
 - 图片消息、多模态失败回退与正文格式清理
-- 显式 URL 抓取与显式意图搜索：Worker 先调 DeepSeek Fetch/Search，再把网页资料作为不可信资料注入同一次回复（`WEB_TOOLS_ENABLED` 可整体关闭）
+- 显式 URL 抓取与显式意图搜索：Worker 先调 DeepSeek Fetch/Search，再把网页资料作为不可信资料注入同一次回复（`WEB_TOOLS_ENABLED` 可整体关闭；owner 可在私聊用“关联网/开联网”切换当前会话，或用“关联网 群”切换灰度群）
 - 贴纸 SHA-256 语义库、owner 私聊识图收录与标签修订、出站贴纸目录和独立富媒体气泡（BOT-020/021 联合；生产启用需明确授权迁移、导入素材并联合灰度）
 
 ## 架构概览

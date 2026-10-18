@@ -7,6 +7,10 @@
 // reference material.
 
 import {
+  WEB_429_COOLDOWN_MS,
+  WEB_FAILURE_BLOCK_MS,
+  WEB_FAILURE_RATE_THRESHOLD,
+  WEB_FAILURE_WINDOW,
   WEB_FETCH_MAX_CHARS,
   WEB_FETCH_TIMEOUT_MS,
   WEB_MAX_URLS_PER_TURN,
@@ -304,6 +308,139 @@ export function classifyWebError(error) {
     ms,
     code: typeof rawStatus === "string" && rawStatus ? rawStatus : "unknown",
   };
+}
+
+// BOT-025-03 S2: a per-conversation control row. `enabled` is null until the
+// owner explicitly toggles it; outcomes are the last window of real calls, not
+// skipped turns, so turning the session off does not pollute the failure rate.
+const WEB_OUTCOMES = new Set(["ok", "empty", "fail"]);
+
+export function parseOwnerWebCommand(value) {
+  const match = String(value ?? "")
+    .trim()
+    .match(/^(关联网|关闭联网|开联网|开启联网)(?:\s+(\S+))?$/u);
+
+  if (!match) return null;
+
+  const enabled = match[1].startsWith("开");
+  const target = match[2] ?? "current";
+
+  if (target === "群") {
+    return { enabled, target: "allowed-group" };
+  }
+
+  if (target === "current" || target === "allowed-group") {
+    return { enabled, target };
+  }
+
+  if (/^group:[A-Za-z0-9_-]+$/u.test(target)) {
+    return { enabled, target };
+  }
+
+  return null;
+}
+
+export function normalizeWebControl(value) {
+  const blockUntil = Number(value?.blockUntil);
+  const outcomes = Array.isArray(value?.outcomes)
+    ? value.outcomes
+        .filter((item) => WEB_OUTCOMES.has(item))
+        .slice(-WEB_FAILURE_WINDOW)
+    : [];
+
+  return {
+    enabled:
+      value?.enabled === true
+        ? true
+        : value?.enabled === false
+          ? false
+          : null,
+    outcomes,
+    blockUntil:
+      Number.isFinite(blockUntil) && blockUntil > 0
+        ? Math.trunc(blockUntil)
+        : 0,
+    blockReason:
+      typeof value?.blockReason === "string" ? value.blockReason : null,
+  };
+}
+
+export function evaluateWebPolicy({
+  globalEnabled = true,
+  control,
+  now = Date.now(),
+} = {}) {
+  if (!globalEnabled) {
+    return { allowed: false, reason: "disabled" };
+  }
+
+  const state = normalizeWebControl(control);
+
+  if (state.enabled === false) {
+    return { allowed: false, reason: "session-disabled" };
+  }
+
+  if (state.blockUntil > now) {
+    return { allowed: false, reason: state.blockReason ?? "cooldown" };
+  }
+
+  return { allowed: true, reason: null };
+}
+
+// Records one real external call. A 429 starts a short cooldown; a sustained
+// failure rate starts a longer circuit break. `empty` is a successful request
+// with no results, so it stays in the denominator but is not a failure.
+export function recordWebOutcome(control, status, now = Date.now()) {
+  const state = normalizeWebControl(control);
+  const outcome =
+    status === "ok" ? "ok" : status === "empty" ? "empty" : "fail";
+  // Half-open recovery: the first successful call after a break starts a fresh
+  // window. Without this, a stale 19/20 failure window would immediately
+  // re-block every later call and the breaker could never close.
+  const wasBlocked = state.blockUntil > 0 && state.blockUntil <= now;
+  const outcomes =
+    wasBlocked && outcome !== "fail"
+      ? [outcome]
+      : [...state.outcomes, outcome].slice(-WEB_FAILURE_WINDOW);
+  let blockUntil = state.blockUntil > now ? state.blockUntil : 0;
+  let blockReason = blockUntil ? state.blockReason : null;
+
+  if (status === "rate_limited") {
+    const until = now + WEB_429_COOLDOWN_MS;
+
+    if (until > blockUntil) {
+      blockUntil = until;
+      blockReason = "rate-limited";
+    }
+  }
+
+  const failures = outcomes.filter((item) => item === "fail").length;
+
+  if (
+    outcomes.length >= WEB_FAILURE_WINDOW &&
+    failures / outcomes.length > WEB_FAILURE_RATE_THRESHOLD
+  ) {
+    const until = now + WEB_FAILURE_BLOCK_MS;
+
+    if (until > blockUntil) {
+      blockUntil = until;
+      blockReason = "failure-threshold";
+    }
+  }
+
+  return { ...state, outcomes, blockUntil, blockReason };
+}
+
+export function setWebControlEnabled(control, enabled) {
+  const state = normalizeWebControl(control);
+
+  if (enabled) {
+    // A deliberate re-enable starts a fresh window; otherwise a stale failure
+    // rate would immediately re-block the next call.
+    return { enabled: true, outcomes: [], blockUntil: 0, blockReason: null };
+  }
+
+  return { ...state, enabled: false, blockUntil: 0, blockReason: null };
 }
 
 export function createWebTools(deps) {
