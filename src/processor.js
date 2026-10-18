@@ -46,11 +46,13 @@ import {
 import { createStore } from "./store.js";
 import { createTokenManager } from "./token.js";
 import {
+  classifyWebError,
   createWebTools,
   detectSearchIntent,
   extractUrls,
   formatSearchContext,
   formatWebContext,
+  webLogLine,
 } from "./web.js";
 
 import {
@@ -260,7 +262,9 @@ export function createProcessor(env, overrides = {}) {
       String(deps.env.WEB_TOOLS_ENABLED ?? "").trim().toLowerCase() ===
       "false"
     ) {
-      deps.logger.log("stage=web tool=web skipped reason=disabled");
+      deps.logger.log(
+        webLogLine({ tool: "web", status: "skipped", reason: "disabled" }),
+      );
       return null;
     }
 
@@ -293,7 +297,9 @@ export function createProcessor(env, overrides = {}) {
       const timeoutMs = Math.min(WEB_FETCH_TIMEOUT_MS, toolBudget());
 
       if (timeoutMs < MIN_STAGE_BUDGET_MS) {
-        deps.logger.log("stage=web tool=fetch skipped reason=budget");
+        deps.logger.log(
+          webLogLine({ tool: "fetch", status: "skipped", reason: "budget" }),
+        );
         return null;
       }
 
@@ -304,14 +310,23 @@ export function createProcessor(env, overrides = {}) {
           const page = await web.fetchPage(url, { timeoutMs });
           pages.push(page);
           deps.logger.log(
-            `stage=web tool=fetch status=ok host=${safeHost(url)} ` +
-              `ms=${page.elapsedMs} chars=${page.content.length}`,
+            webLogLine({
+              tool: "fetch",
+              status: "ok",
+              host: safeHost(url),
+              http: page.httpStatus,
+              ms: page.elapsedMs,
+              resultCount: 1,
+              chars: page.content.length,
+            }),
           );
         } catch (error) {
           deps.logger.log(
-            `stage=web tool=fetch status=error ` +
-              `code=${error?.status ?? "unknown"} ` +
-              `ms=${error?.elapsedMs ?? "?"}`,
+            webLogLine({
+              tool: "fetch",
+              ...classifyWebError(error),
+              host: safeHost(url),
+            }),
           );
         }
       }
@@ -322,41 +337,66 @@ export function createProcessor(env, overrides = {}) {
     const intent = detectSearchIntent(source);
 
     if (!intent) {
+      deps.logger.log(
+        webLogLine({
+          tool: "web",
+          status: "skipped",
+          reason: "no-trigger",
+        }),
+      );
       return null;
     }
 
     const timeoutMs = Math.min(WEB_SEARCH_TIMEOUT_MS, toolBudget());
 
     if (timeoutMs < MIN_STAGE_BUDGET_MS) {
-      deps.logger.log("stage=web tool=search skipped reason=budget");
+      deps.logger.log(
+        webLogLine({ tool: "search", status: "skipped", reason: "budget" }),
+      );
       return null;
     }
 
     try {
-      const { results, elapsedMs } = await web.search(intent.query, {
-        timeoutMs,
-      });
+      const { results, elapsedMs, httpStatus } = await web.search(
+        intent.query,
+        { timeoutMs },
+      );
+      const chars = results.reduce(
+        (total, result) => total + result.summary.length,
+        0,
+      );
 
       if (results.length === 0) {
         deps.logger.log(
-          `stage=web tool=search status=empty trigger=${intent.trigger} ` +
-            `queryChars=${intent.query.length} ms=${elapsedMs}`,
+          webLogLine({
+            tool: "search",
+            status: "empty",
+            trigger: intent.trigger,
+            http: httpStatus,
+            ms: elapsedMs,
+            resultCount: 0,
+            chars: 0,
+          }),
         );
         return null;
       }
 
       deps.logger.log(
-        `stage=web tool=search status=ok trigger=${intent.trigger} ` +
-          `results=${results.length} queryChars=${intent.query.length} ` +
-          `ms=${elapsedMs}`,
+        webLogLine({
+          tool: "search",
+          status: "ok",
+          trigger: intent.trigger,
+          http: httpStatus,
+          ms: elapsedMs,
+          resultCount: results.length,
+          chars,
+        }),
       );
 
       return formatSearchContext(results, { now: deps.now() });
     } catch (error) {
       deps.logger.log(
-        `stage=web tool=search status=error ` +
-          `code=${error?.status ?? "unknown"} ` +
-          `ms=${error?.elapsedMs ?? "?"}`,
+        webLogLine({ tool: "search", ...classifyWebError(error) }),
       );
       return null;
     }

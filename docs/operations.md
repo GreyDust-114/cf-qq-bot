@@ -44,13 +44,15 @@ QQ AI Bot is running.
 | `stage=sticker … result=failed reason=…` | 贴纸资源、上传或发送失败；查对应 outbox `failed/uncertain` 行，不能因上传成功就推断图片已发出 |
 | `stage=sticker-review id=… result=sent` | owner 主动私聊拉取的一张待确认贴纸已通过被动 C2C 回复发送；日志只含指纹短 ID，不含 URL/图片内容 |
 | `stage=sticker-vision id=… label=yes/no note=yes/no` | owner 私聊送图后的一次性识图初判；失败只影响建议文案，不影响编号和后续收录 |
-| `stage=web tool=fetch status=ok host=… ms=… chars=…` | 显式 URL 抓取成功；只记 host、耗时和正文长度，不记完整 URL/正文 |
-| `stage=web tool=fetch status=error code=… ms=…` | Fetch 失败（403/404/429/timeout/empty/network 等）已降级为无网页资料，正常回复继续 |
-| `stage=web tool=search status=ok trigger=… results=… queryChars=… ms=…` | 显式搜索成功；`trigger` 为 `explicit` / `time-sensitive` / `news` / `term`，只记查询字符数，不记查询原文 |
-| `stage=web tool=search status=empty trigger=… queryChars=… ms=…` | Search 正常返回但没有结果，本轮按无资料处理 |
-| `stage=web tool=search status=error code=… ms=…` | Search 失败（400/401/402/429/timeout/network 等）已降级，正常回复继续 |
-| `stage=web tool=web skipped reason=disabled` | 网页工具整体关闭，本轮不联网 |
-| `stage=web tool=fetch\|search skipped reason=budget` | 剩余预算不足，本轮对应的外部工具不执行 |
+| `stage=web ... status=ok` | 网页工具成功；统一字段为 `tool` / `status` / `http` / `ms` / `resultCount` / `chars`，Fetch 额外带 `host`，Search 额外带 `trigger` |
+| `stage=web ... status=empty` | 无结果：Fetch 拿到空正文或 Search 返回 0 条，本轮按无资料处理 |
+| `stage=web ... status=rate_limited` | 上游 429 限流，已降级，不计为成功 |
+| `stage=web ... status=timeout` | 超时（`http=0`），已降级 |
+| `stage=web ... status=denied` | 策略拒绝（403/451），已降级 |
+| `stage=web ... status=error` | 其他失败：带 `http` 或 `code`（`network` / `invalid-json` / 400 / 5xx 等） |
+| `stage=web tool=web status=skipped reason=no-trigger` | 本轮没有显式 URL 或搜索意图，不联网 |
+| `stage=web ... status=skipped reason=disabled` | `WEB_TOOLS_ENABLED=false`，网页工具整体关闭 |
+| `stage=web ... status=skipped reason=budget` | 剩余预算不足，本轮对应的外部工具不执行 |
 
 ## outbox 判定
 
@@ -124,11 +126,11 @@ QQ AI Bot is running.
 
 ### 网页工具未触发或被关闭
 
-- 先确认 `WEB_TOOLS_ENABLED`；为 `false` 时日志会出现 `stage=web tool=web skipped reason=disabled`，回复按无网页资料继续。
-- `autonomous` 路由不联网；只有 @、私聊或明确续聊的当前批次目标会触发。
+- 先确认 `WEB_TOOLS_ENABLED`；为 `false` 时日志会出现 `stage=web tool=web status=skipped reason=disabled`，回复按无网页资料继续。
+- `autonomous` 路由不联网；只有 @、私聊或明确续聊的当前批次目标会触发。未触发的批次记 `status=skipped reason=no-trigger`。
 - 有 `http(s)://` 链接时优先 Fetch；没有链接时只有显式搜索意图才 Search，单轮二选一。
-- `stage=web ... skipped reason=budget` 表示剩余调用预算不足；`stage=web tool=search status=empty` 表示搜索正常返回但没有结果。
-- 日志只记 host、耗时、结果数、查询字符数和错误码；排查用脱敏/自造样例，不复制真实 URL、查询原文或网页正文。
+- 按 `status` 区分降级原因：`empty` 无结果、`rate_limited` 429、`timeout` 超时、`denied` 403/451、`error` 其他失败；`skipped` 表示未执行。
+- 日志只记 host、耗时、结果数和字符数；排查用脱敏/自造样例，不复制真实 URL、查询原文或网页正文。
 
 ## 已知限制
 

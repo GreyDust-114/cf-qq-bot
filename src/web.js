@@ -213,11 +213,97 @@ function clipText(text, maxChars, label = "正文") {
   );
 }
 
-function webError(status, elapsedMs) {
+function webError(status, elapsedMs, httpStatus = 0) {
   const error = new Error(`web fetch failed: ${status}`);
   error.status = status;
   error.elapsedMs = elapsedMs;
+  error.http = httpStatus;
   return error;
+}
+
+// BOT-025-03: one stable line per web-tool decision. Only internal enums and
+// numbers are logged; query text, full URLs, page bodies and member identity
+// never reach this formatter.
+const LOG_TOKEN_PATTERN = /^[a-z0-9_.:\-[\]]+$/u;
+
+function logToken(value, fallback) {
+  const text = String(value ?? "").trim().toLowerCase();
+  return LOG_TOKEN_PATTERN.test(text) ? text : fallback;
+}
+
+function logNumber(value) {
+  const number = Number(value);
+  return Number.isFinite(number) && number >= 0 ? Math.trunc(number) : 0;
+}
+
+export function webLogLine(fields = {}) {
+  const parts = [
+    "stage=web",
+    `tool=${logToken(fields.tool, "web")}`,
+    `status=${logToken(fields.status, "error")}`,
+  ];
+
+  if (fields.reason != null) {
+    parts.push(`reason=${logToken(fields.reason, "unknown")}`);
+  }
+
+  if (fields.trigger != null) {
+    parts.push(`trigger=${logToken(fields.trigger, "unknown")}`);
+  }
+
+  parts.push(`http=${logNumber(fields.http)}`);
+  parts.push(`ms=${logNumber(fields.ms)}`);
+  parts.push(`resultCount=${logNumber(fields.resultCount)}`);
+  parts.push(`chars=${logNumber(fields.chars)}`);
+
+  if (fields.host != null) {
+    parts.push(`host=${logToken(fields.host, "invalid")}`);
+  }
+
+  if (fields.code != null) {
+    parts.push(`code=${logToken(fields.code, "unknown")}`);
+  }
+
+  return parts.join(" ");
+}
+
+// Maps tool failures to observable failure states. 403/451 are policy denials
+// from the upstream fetch; 429 is rate limiting; everything else keeps its
+// HTTP code (or the transport code such as network/invalid-json) for
+// troubleshooting.
+export function classifyWebError(error) {
+  const rawStatus = error?.status;
+  const ms = logNumber(error?.elapsedMs);
+  const http = logNumber(
+    error?.http ?? (Number.isInteger(rawStatus) ? rawStatus : 0),
+  );
+
+  if (rawStatus === "timeout") {
+    return { status: "timeout", http, ms, code: "timeout" };
+  }
+
+  if (rawStatus === "empty") {
+    return { status: "empty", http, ms, code: "empty" };
+  }
+
+  if (rawStatus === 429) {
+    return { status: "rate_limited", http: 429, ms };
+  }
+
+  if (rawStatus === 403 || rawStatus === 451) {
+    return { status: "denied", http: rawStatus, ms };
+  }
+
+  if (Number.isInteger(rawStatus)) {
+    return { status: "error", http: rawStatus, ms };
+  }
+
+  return {
+    status: "error",
+    http,
+    ms,
+    code: typeof rawStatus === "string" && rawStatus ? rawStatus : "unknown",
+  };
 }
 
 export function createWebTools(deps) {
@@ -257,7 +343,7 @@ export function createWebTools(deps) {
     const elapsedMs = deps.now() - startedAt;
 
     if (!response.ok) {
-      throw webError(response.status, elapsedMs);
+      throw webError(response.status, elapsedMs, response.status);
     }
 
     let data;
@@ -265,14 +351,14 @@ export function createWebTools(deps) {
     try {
       data = JSON.parse(body);
     } catch {
-      throw webError("invalid-json", elapsedMs);
+      throw webError("invalid-json", elapsedMs, response.status);
     }
 
     const content =
       typeof data?.content === "string" ? data.content.trim() : "";
 
     if (!content) {
-      throw webError("empty", elapsedMs);
+      throw webError("empty", elapsedMs, response.status);
     }
 
     return {
@@ -284,6 +370,7 @@ export function createWebTools(deps) {
       url,
       fetchedAt: deps.now(),
       elapsedMs,
+      httpStatus: response.status,
     };
   }
 
@@ -331,7 +418,7 @@ export function createWebTools(deps) {
     const elapsedMs = deps.now() - startedAt;
 
     if (!response.ok) {
-      throw webError(response.status, elapsedMs);
+      throw webError(response.status, elapsedMs, response.status);
     }
 
     let data;
@@ -339,7 +426,7 @@ export function createWebTools(deps) {
     try {
       data = JSON.parse(body);
     } catch {
-      throw webError("invalid-json", elapsedMs);
+      throw webError("invalid-json", elapsedMs, response.status);
     }
 
     const results = (Array.isArray(data?.results) ? data.results : [])
@@ -362,7 +449,7 @@ export function createWebTools(deps) {
       }))
       .filter((result) => result.summary);
 
-    return { results, elapsedMs };
+    return { results, elapsedMs, httpStatus: response.status };
   }
 
   return { fetchPage, search };
